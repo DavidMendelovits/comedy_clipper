@@ -12,10 +12,22 @@ contextBridge.exposeInMainWorld('electron', {
   getDebugFrames: (directory: string) => ipcRenderer.invoke('get-debug-frames', directory),
 
   onClipperOutput: (callback: (data: any) => void) => {
-    ipcRenderer.on('clipper-output', (_event, data) => callback(data))
+    const subscription = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('clipper-output', subscription)
+    // Return cleanup function
+    return () => {
+      ipcRenderer.removeListener('clipper-output', subscription)
+    }
   },
 
   onClipperProgress: (callback: (data: any) => void) => {
-    ipcRenderer.on('clipper-progress', (_event, data) => callback(data))
+    const subscription = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('clipper-progress', subscription)
+    // Return cleanup function
+    return () => {
+      ipcRenderer.removeListener('clipper-progress', subscription)
+    }
   },
 })
+
+console.log('Preload script loaded - window.electron is available')
