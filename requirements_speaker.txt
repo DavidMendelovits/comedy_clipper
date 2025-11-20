@@ -1,0 +1,8 @@
+# Speaker Diarization Dependencies (clipper_speaker.py)
+resemblyzer>=0.1.4
+spectralcluster>=0.2.22
+librosa>=0.11.0
+webrtcvad>=2.0.10
+numpy>=1.25.0
+scipy>=1.10.0
+torch>=2.0.0
