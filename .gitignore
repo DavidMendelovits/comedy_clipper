@@ -55,3 +55,8 @@ Thumbs.db
 # Output
 clips/
 output/
+
+# Electron
+node_modules/
+dist-electron/
+*.log
