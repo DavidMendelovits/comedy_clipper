@@ -55,9 +55,13 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onChange }) => {
             className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
             min="0"
             step="30"
+            disabled={config.clipperType === 'configurable'}
           />
           <p className="mt-2 text-xs text-slate-400">
-            Filter out segments shorter than this duration
+            {config.clipperType === 'configurable'
+              ? 'Set in YAML config file (clipper_rules.yaml)'
+              : 'Filter out segments shorter than this duration'
+            }
           </p>
         </div>
 
