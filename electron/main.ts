@@ -120,11 +120,25 @@ ipcMain.handle('run-clipper', async (_event, config: {
       args.push('-c', options.configFile)
     }
 
-    // Find Python executable
-    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3'
+    // Find Python executable - prefer venv
+    const appPath = app.getAppPath()
+    let pythonCmd: string
+
+    // Check for venv in the app directory
+    const venvPaths = [
+      path.join(appPath, 'venv_mediapipe', 'bin', 'python3'),
+      path.join(appPath, 'venv_mediapipe', 'bin', 'python'),
+      path.join(appPath, 'venv', 'bin', 'python3'),
+      path.join(appPath, 'venv', 'bin', 'python'),
+    ]
+
+    // Find first existing venv python
+    pythonCmd = venvPaths.find(p => fs.existsSync(p)) || (process.platform === 'win32' ? 'python' : 'python3')
+
+    console.log('Using Python:', pythonCmd)
 
     pythonProcess = spawn(pythonCmd, args, {
-      cwd: app.getAppPath(),
+      cwd: appPath,
     })
 
     let output = ''
