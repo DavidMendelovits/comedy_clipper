@@ -19,6 +19,9 @@ export default defineConfig({
             rollupOptions: {
               external: ['electron']
             }
+          },
+          define: {
+            'process.env.VITE_DEV_SERVER_URL': JSON.stringify(process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173')
           }
         }
       },

@@ -27,8 +27,11 @@ function createWindow() {
     backgroundColor: '#0f172a',
   })
 
-  if (process.env.NODE_ENV === 'development') {
-    mainWindow.loadURL('http://localhost:5173')
+  // VITE_DEV_SERVER_URL is set by vite-plugin-electron in dev mode
+  const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
+
+  if (VITE_DEV_SERVER_URL) {
+    mainWindow.loadURL(VITE_DEV_SERVER_URL)
     mainWindow.webContents.openDevTools()
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
