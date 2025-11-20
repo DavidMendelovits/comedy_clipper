@@ -1,0 +1,241 @@
+# Comedy Clipper - Detection Rules Configuration
+# Edit this file to customize how the clipper detects comedian sets
+
+# ============================================================================
+# TRANSITION-BASED DETECTION (Primary Mode)
+# ============================================================================
+# Detects segments based on changes in person count on stage
+# Useful for shows with host introductions
+
+transition_detection:
+  enabled: true
+
+  # Transition rules: Define what person count changes trigger segment boundaries
+  # Format: [from_count, to_count, action]
+  # Actions: "start_segment" or "end_segment"
+
+  rules:
+    # Host + Comedian → Host only (comedian exits)
+    - from: 2
+      to: 1
+      action: end_segment
+      description: "Comedian exits, host remains"
+
+    # Host only → Host + Comedian (comedian enters)
+    - from: 1
+      to: 2
+      action: start_segment
+      description: "Comedian enters with host"
+
+    # Empty stage → Person appears (comedian enters alone)
+    - from: 0
+      to: 1
+      action: start_segment
+      description: "Comedian enters empty stage"
+
+    # Person on stage → Empty stage (comedian exits)
+    - from: 1
+      to: 0
+      action: end_segment
+      description: "Comedian exits, stage empty"
+
+    # Any count → 2+ people (comedian enters with others)
+    - from: any
+      to: 2+
+      action: start_segment
+      description: "Multiple people on stage"
+
+    # 2+ people → 0 or 1 (comedian exits with others)
+    - from: 2+
+      to: 1-
+      action: end_segment
+      description: "People exit stage"
+
+  # Minimum frames with new count before triggering transition (prevents flicker)
+  transition_stability_frames: 3
+
+  # Confidence: How to combine face and pose counts
+  # Options: "min" (conservative), "max" (liberal), "average"
+  # Note: Use "max" since MediaPipe Pose only tracks 1 person at a time
+  person_count_method: max
+
+# ============================================================================
+# POSITION-BASED DETECTION (Fallback Mode)
+# ============================================================================
+# Falls back to position-based detection if no transitions found
+# Detects when person exits stage left/right
+
+position_detection:
+  enabled: true
+
+  # Stage boundary thresholds (0.0 to 0.5)
+  # 0.15 = person is within 15% of frame edge
+  exit_threshold: 0.15
+
+  # Position must be stable for N frames before triggering exit
+  exit_stability_frames: 2
+
+  # Track position of:
+  # Options: "center" (bounding box center), "torso" (pose landmarks)
+  tracking_point: torso
+
+# ============================================================================
+# DETECTION CONFIDENCE
+# ============================================================================
+
+confidence:
+  # MediaPipe Face Detection
+  face_detection:
+    min_detection_confidence: 0.5
+    model_selection: 1  # 0=short range (< 2m), 1=full range (> 2m)
+
+  # MediaPipe Pose Detection
+  pose_detection:
+    min_detection_confidence: 0.5
+    min_tracking_confidence: 0.5
+    model_complexity: 1  # 0=lite, 1=full, 2=heavy
+    smooth_landmarks: true
+
+# ============================================================================
+# KALMAN FILTER (Smoothing)
+# ============================================================================
+
+kalman_filter:
+  enabled: true
+
+  # Process noise (how much we trust the model)
+  # Lower = smoother but slower to adapt
+  process_noise: 1.0
+
+  # Measurement noise (how much we trust measurements)
+  # Lower = trust measurements more
+  measurement_noise: 5.0
+
+  # Initial uncertainty
+  initial_covariance: 10.0
+
+# ============================================================================
+# BLUR DETECTION
+# ============================================================================
+# Prevents clipping at blurry/out-of-focus frames
+# Uses Laplacian variance to detect sharpness
+
+blur_detection:
+  enabled: true
+
+  # Blur threshold (Laplacian variance)
+  # Lower = more strict (more frames considered blurry)
+  # Typical values: 50-200
+  threshold: 100.0
+
+  # When segment boundary is blurry, shift to nearest sharp frame
+  # Maximum frames to search (in both directions)
+  boundary_shift_max_frames: 30  # ~1 second at 30fps
+
+  # Minimum sharpness required for segment boundaries
+  # Set higher than general threshold for better clip quality
+  boundary_sharpness_min: 150.0
+
+  # Log blurry frames to console
+  log_blurry_frames: false
+
+# ============================================================================
+# SEGMENT FILTERING
+# ============================================================================
+
+filtering:
+  # Minimum segment duration (seconds)
+  min_duration: 180.0  # 3 minutes
+
+  # Maximum segment duration (seconds, 0 = no limit)
+  max_duration: 0
+
+  # Minimum gap between segments (seconds)
+  # Segments closer than this may be merged
+  min_gap: 5.0
+
+  # Auto-merge close segments
+  merge_close_segments: true
+
+  # Time buffer (seconds) to add before/after detected transitions
+  # Ensures we don't clip too close to the transition point
+  buffer_before_start: 2.0  # Start clip 2s before transition
+  buffer_after_end: 2.0     # End clip 2s after transition
+
+# ============================================================================
+# VIDEO PROCESSING
+# ============================================================================
+
+processing:
+  # Frame sampling rate
+  # 1 = every frame, 2 = every other frame, etc.
+  # Higher = faster but less accurate
+  sample_rate: 30  # Process 1 frame per second (assuming 30fps)
+
+  # Adaptive sampling: slow down when person count changes
+  adaptive_sampling: true
+  adaptive_rate_on_change: 15  # 2 frames per second during transitions
+
+# ============================================================================
+# OUTPUT
+# ============================================================================
+
+output:
+  # Timestamped folder names
+  use_timestamps: true
+
+  # Folder naming
+  clips_folder_suffix: "clips"
+  debug_folder_suffix: "debug"
+
+  # FFmpeg encoding settings
+  ffmpeg:
+    video_codec: libx264
+    audio_codec: aac
+    preset: fast  # ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+    crf: 23  # Quality (18-28, lower = better quality)
+
+# ============================================================================
+# DEBUG
+# ============================================================================
+
+debug:
+  # Export debug frames
+  export_frames: true
+
+  # Which frames to export
+  export_first_frame: true
+  export_last_frame: true
+  export_transition_frames: false  # Export frames where transitions occur
+
+  # Overlay elements
+  overlays:
+    draw_pose_landmarks: true
+    draw_face_boxes: true
+    draw_stage_boundaries: true
+    draw_position_indicator: true
+    draw_text_info: true
+
+  # Text info to display
+  text_info:
+    - frame_number
+    - num_faces
+    - num_poses
+    - person_count
+    - confidence_score
+    - position
+    - status
+
+# ============================================================================
+# EXPERIMENTAL
+# ============================================================================
+
+experimental:
+  # Use motion detection to identify active speaker
+  motion_based_segmentation: false
+
+  # Use audio levels to detect applause/laughter
+  audio_based_segmentation: false
+
+  # Multi-person pose tracking (requires different model)
+  multi_person_tracking: false
