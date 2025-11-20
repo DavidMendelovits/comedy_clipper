@@ -49,6 +49,14 @@ function App() {
   const [debugFrames, setDebugFrames] = useState<any[]>([])
 
   useEffect(() => {
+    // Check if electron API is available
+    if (!(window as any).electron) {
+      console.error('Electron API not available! Preload script may not have loaded.')
+      return
+    }
+
+    console.log('Electron API available:', Object.keys((window as any).electron))
+
     // Listen for clipper output
     ;(window as any).electron?.onClipperOutput((data: any) => {
       setProcessState(prev => ({
@@ -77,6 +85,12 @@ function App() {
 
   const handleRunClipper = async () => {
     if (!selectedVideo) return
+
+    if (!(window as any).electron) {
+      console.error('Electron API not available!')
+      alert('Electron API not loaded. Please restart the app.')
+      return
+    }
 
     setProcessState({
       running: true,
