@@ -9,8 +9,8 @@ export default defineConfig({
     electron([
       {
         entry: 'electron/main.ts',
-        onstart(options) {
-          options.startup()
+        onstart({ startup }) {
+          startup()
         },
         vite: {
           build: {
@@ -23,8 +23,8 @@ export default defineConfig({
       },
       {
         entry: 'electron/preload.ts',
-        onstart(options) {
-          options.reload()
+        onstart({ reload }) {
+          reload()
         },
         vite: {
           build: {

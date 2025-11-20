@@ -31,10 +31,23 @@ function createWindow() {
   // VITE_DEV_SERVER_URL is set by vite-plugin-electron in dev mode
   const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 
+  console.log('Environment:', {
+    VITE_DEV_SERVER_URL,
+    NODE_ENV: process.env.NODE_ENV,
+    isDev: !app.isPackaged
+  })
+
   if (VITE_DEV_SERVER_URL) {
+    console.log('Loading from dev server:', VITE_DEV_SERVER_URL)
     mainWindow.loadURL(VITE_DEV_SERVER_URL)
     mainWindow.webContents.openDevTools()
+  } else if (!app.isPackaged) {
+    // Fallback for development mode
+    console.log('Dev mode detected, using localhost:5173')
+    mainWindow.loadURL('http://localhost:5173')
+    mainWindow.webContents.openDevTools()
   } else {
+    console.log('Loading from file:', path.join(__dirname, '../dist/index.html'))
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
 
