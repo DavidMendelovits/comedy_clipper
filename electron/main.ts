@@ -137,6 +137,8 @@ ipcMain.handle('run-clipper', async (_event, config: {
     const appPath = app.getAppPath()
     let pythonCmd: string
 
+    console.log('App path:', appPath)
+
     // Check for venv in the app directory
     const venvPaths = [
       path.join(appPath, 'venv_mediapipe', 'bin', 'python3'),
@@ -145,10 +147,17 @@ ipcMain.handle('run-clipper', async (_event, config: {
       path.join(appPath, 'venv', 'bin', 'python'),
     ]
 
+    console.log('Checking venv paths:', venvPaths)
+
     // Find first existing venv python
-    pythonCmd = venvPaths.find(p => fs.existsSync(p)) || (process.platform === 'win32' ? 'python' : 'python3')
+    pythonCmd = venvPaths.find(p => {
+      const exists = fs.existsSync(p)
+      console.log(`  ${p}: ${exists}`)
+      return exists
+    }) || (process.platform === 'win32' ? 'python' : 'python3')
 
     console.log('Using Python:', pythonCmd)
+    console.log('Python exists:', fs.existsSync(pythonCmd))
 
     pythonProcess = spawn(pythonCmd, args, {
       cwd: appPath,
