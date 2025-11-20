@@ -114,14 +114,17 @@ ipcMain.handle('run-clipper', async (_event, config: {
     const { videoPath, clipperType, options } = config
     const scriptPath = path.join(app.getAppPath(), PYTHON_SCRIPTS[clipperType as keyof typeof PYTHON_SCRIPTS])
 
-    // Build command arguments
+    // Build command arguments based on clipper type
     const args = [scriptPath, videoPath]
 
     if (options.outputDir) {
       args.push('-o', options.outputDir)
     }
 
-    if (options.minDuration) {
+    // Only some clippers support -m (min duration)
+    // configurable: uses YAML config instead
+    // speaker, pose, ffmpeg: support -m
+    if (options.minDuration && clipperType !== 'configurable') {
       args.push('-m', options.minDuration.toString())
     }
 
