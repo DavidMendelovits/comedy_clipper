@@ -145,7 +145,7 @@ blur_detection:
 
 filtering:
   # Minimum segment duration (seconds)
-  min_duration: 180.0  # 3 minutes
+  min_duration: 5.0  # 5 seconds (lowered for shorter videos)
 
   # Maximum segment duration (seconds, 0 = no limit)
   max_duration: 0
