@@ -105,6 +105,30 @@ ipcMain.handle('select-output-directory', async () => {
   return null
 })
 
+ipcMain.handle('open-in-finder', async (_event, filePath: string) => {
+  const { shell } = require('electron')
+  try {
+    // Show the file in Finder/Explorer
+    shell.showItemInFolder(filePath)
+    return { success: true }
+  } catch (error: any) {
+    console.error('Error opening in Finder:', error)
+    return { success: false, error: error.message }
+  }
+})
+
+ipcMain.handle('open-file', async (_event, filePath: string) => {
+  const { shell } = require('electron')
+  try {
+    // Open the file with default application
+    await shell.openPath(filePath)
+    return { success: true }
+  } catch (error: any) {
+    console.error('Error opening file:', error)
+    return { success: false, error: error.message }
+  }
+})
+
 ipcMain.handle('run-clipper', async (_event, config: {
   videoPath: string
   clipperType: string

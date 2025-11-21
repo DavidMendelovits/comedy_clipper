@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('electron', {
   stopClipper: () => ipcRenderer.invoke('stop-clipper'),
   getClips: (directory: string) => ipcRenderer.invoke('get-clips', directory),
   getDebugFrames: (directory: string) => ipcRenderer.invoke('get-debug-frames', directory),
+  openInFinder: (filePath: string) => ipcRenderer.invoke('open-in-finder', filePath),
+  openFile: (filePath: string) => ipcRenderer.invoke('open-file', filePath),
 
   onClipperOutput: (callback: (data: any) => void) => {
     const subscription = (_event: any, data: any) => callback(data)

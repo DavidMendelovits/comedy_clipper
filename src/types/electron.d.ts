@@ -27,6 +27,8 @@ export interface ElectronAPI {
       dir: string
     }>
   >
+  openInFinder: (filePath: string) => Promise<{ success: boolean; error?: string }>
+  openFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
   onClipperOutput: (callback: (data: { type: string; message: string }) => void) => void
   onClipperProgress: (callback: (data: { current: number; total: number; percent: number }) => void) => void
 }
