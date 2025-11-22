@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
-import { Upload, Video } from 'lucide-react'
+import { Upload, Video, Sparkles, FileVideo } from 'lucide-react'
+import Card from './ui/Card'
 
 interface DropZoneProps {
   onVideoSelect: (path: string) => void
@@ -39,57 +40,106 @@ const DropZone: React.FC<DropZoneProps> = ({ onVideoSelect }) => {
     }
   }
 
+  const supportedFormats = [
+    { name: 'MP4', icon: FileVideo },
+    { name: 'MOV', icon: FileVideo },
+    { name: 'AVI', icon: FileVideo },
+    { name: 'MKV', icon: FileVideo },
+    { name: 'WEBM', icon: FileVideo },
+  ]
+
   return (
     <div
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`
-        w-full max-w-2xl p-12 rounded-2xl border-2 border-dashed
-        transition-all duration-300 cursor-pointer
-        ${isDragging
-          ? 'border-primary-400 bg-primary-900/20 scale-105'
-          : 'border-slate-600 bg-slate-800/50 hover:border-slate-500 hover:bg-slate-800'
-        }
-      `}
       onClick={handleBrowse}
+      className={`
+        w-full max-w-2xl transition-all duration-300 cursor-pointer
+        ${isDragging ? 'scale-[1.02]' : 'hover:scale-[1.01]'}
+      `}
     >
-      <div className="flex flex-col items-center gap-6 text-center">
-        <div className={`
-          p-6 rounded-full transition-colors
-          ${isDragging ? 'bg-primary-600' : 'bg-slate-700'}
-        `}>
-          {isDragging ? (
-            <Video className="w-12 h-12 animate-pulse" />
-          ) : (
-            <Upload className="w-12 h-12" />
-          )}
-        </div>
+      <Card
+        variant={isDragging ? 'gradient-border' : 'elevated'}
+        padding="lg"
+        className={`
+          border-2 border-dashed
+          ${isDragging
+            ? 'border-primary-400 bg-primary-900/20 shadow-glow-lg'
+            : 'border-slate-600 hover:border-slate-500'
+          }
+        `}
+      >
+        <div className="flex flex-col items-center gap-8 text-center">
+          {/* Icon with animation */}
+          <div className="relative">
+            <div className={`
+              p-8 rounded-2xl transition-all duration-300
+              ${isDragging
+                ? 'bg-gradient-to-br from-primary-600 to-primary-500 shadow-glow-md scale-110'
+                : 'bg-slate-700/50 hover:bg-slate-700'
+              }
+            `}>
+              {isDragging ? (
+                <Video className="w-16 h-16 text-white animate-bounce-subtle" />
+              ) : (
+                <Upload className="w-16 h-16 text-slate-300" />
+              )}
+            </div>
+            {isDragging && (
+              <div className="absolute -top-2 -right-2">
+                <Sparkles className="w-8 h-8 text-primary-300 animate-pulse" />
+              </div>
+            )}
+          </div>
 
-        <div>
-          <h3 className="text-2xl font-bold mb-2">
-            {isDragging ? 'Drop your video here' : 'Drop a video to start'}
-          </h3>
-          <p className="text-slate-400 mb-4">
-            or click to browse your files
-          </p>
-          <div className="flex flex-wrap justify-center gap-2 text-sm text-slate-500">
-            <span className="px-2 py-1 bg-slate-700 rounded">MP4</span>
-            <span className="px-2 py-1 bg-slate-700 rounded">MOV</span>
-            <span className="px-2 py-1 bg-slate-700 rounded">AVI</span>
-            <span className="px-2 py-1 bg-slate-700 rounded">MKV</span>
-            <span className="px-2 py-1 bg-slate-700 rounded">WEBM</span>
+          {/* Text content */}
+          <div>
+            <h3 className={`
+              text-3xl font-bold mb-3 transition-all duration-300
+              ${isDragging ? 'text-gradient scale-105' : 'text-slate-100'}
+            `}>
+              {isDragging ? 'Drop your video here!' : 'Drop a video to start'}
+            </h3>
+            <p className="text-slate-400 text-lg mb-6">
+              or <span className="text-primary-400 font-medium">click to browse</span> your files
+            </p>
+
+            {/* Supported formats */}
+            <div className="flex flex-wrap justify-center gap-3">
+              {supportedFormats.map((format) => (
+                <div
+                  key={format.name}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700/50 rounded-lg border border-slate-600 hover:border-primary-500/50 hover:bg-slate-700 transition-all"
+                >
+                  <format.icon size={14} className="text-slate-400" />
+                  <span className="text-sm text-slate-300 font-medium">{format.name}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Tip card */}
+          <div className="w-full max-w-md">
+            <Card
+              variant="glass"
+              padding="md"
+              className="border border-primary-500/20"
+            >
+              <div className="flex items-start gap-3">
+                <div className="flex-shrink-0 p-2 bg-primary-500/20 rounded-lg">
+                  <Sparkles className="w-5 h-5 text-primary-400" />
+                </div>
+                <p className="text-sm text-slate-300 text-left">
+                  <span className="font-semibold text-primary-400">Pro Tip:</span> The configurable clipper
+                  uses AI to detect comedians by face and pose detection. Enable debug mode to see
+                  detection frames in action!
+                </p>
+              </div>
+            </Card>
           </div>
         </div>
-
-        <div className="w-full max-w-md p-4 bg-slate-900/50 rounded-lg border border-slate-700">
-          <p className="text-sm text-slate-300">
-            <span className="font-semibold text-primary-400">Tip:</span> The configurable clipper
-            uses AI to detect comedians by face and pose detection. Enable debug mode to see
-            detection frames!
-          </p>
-        </div>
-      </div>
+      </Card>
     </div>
   )
 }

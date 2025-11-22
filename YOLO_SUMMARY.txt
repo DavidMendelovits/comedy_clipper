@@ -1,0 +1,151 @@
+YOLOv8 PERSON DETECTION IMPLEMENTATION SUMMARY
+===============================================
+
+CURRENT CONFIGURATION (clipper_rules.yaml):
+
+1. YOLO DETECTION:
+   - Status: ENABLED
+   - Model: yolov8n.pt (nano - fastest)
+   - Confidence: 0.5 (50% detection threshold)
+   - Tracking: Persists up to 30 frames (~1 second at 30fps)
+
+2. AUDIENCE EXCLUSION (ZONE CROSSING):
+   - Status: ENABLED
+   - Method: Rectangle boundary
+   - Left: 5% from edge (includes full stage width)
+   - Right: 95% from edge (5% right margin)
+   - Top: 0% (from top of frame)
+   - Bottom: 85% (CUTS OFF bottom 15% where audience sits)
+   - Purpose: Only count people inside stage area, ignore foreground audience
+
+3. PERSON COUNT METHOD:
+   - Selected: yolo_zone
+   - Effect: Uses YOLO detections but ONLY counts people inside zone
+   - Alternative: "yolo" (counts all people), "hybrid" (fallback to MediaPipe)
+
+KEY FILES:
+- Configuration: /Users/davidmendelovits/space/comedy_clipper/.conductor/toronto/clipper_rules.yaml (lines 129-170)
+- Implementation: /Users/davidmendelovits/space/comedy_clipper/.conductor/toronto/clipper_unified.py (lines 189-606)
+- Tracking: /Users/davidmendelovits/space/comedy_clipper/.conductor/toronto/person_tracker.py
+- Config Loader: /Users/davidmendelovits/space/comedy_clipper/.conductor/toronto/config_loader.py
+
+DETECTION SENSITIVITY PARAMETERS:
+1. confidence: 0.5
+   - Range: 0.0-1.0
+   - Lower = more detections (false positives)
+   - Higher = fewer detections (false negatives)
+   - Effect: Controls initial YOLO detection threshold
+
+2. max_disappeared_frames: 30
+   - Range: Any positive integer
+   - Higher = longer persistence across gaps
+   - Effect: Handles occlusions and brief disappearances
+
+3. person_count_smoothing: true
+   - Window: 5 frames
+   - Effect: Median filter reduces noise in person count
+   - Use: Prevents false transitions from jittery detection
+
+AUDIENCE EXCLUSION MECHANISM:
+1. YOLO detects ALL people in frame (using class 0 - PERSON only)
+2. Centroid Tracker maintains object IDs
+3. Zone Checker classifies each person as "inside" or "outside"
+   - Inside: x in [left, right] AND y in [top, bottom]
+   - Outside: everything else
+4. Person count = count of "inside" people only
+5. Transitions based on this filtered count
+
+DISTINGUISHING COMEDIANS VS AUDIENCE:
+Primary Method: Spatial Filtering (Zone Boundary)
+- Comedians perform on stage (upper 85% of frame) = INSIDE
+- Audience sits in foreground (bottom 15% of frame) = OUTSIDE
+- Only INSIDE people are counted for transitions
+
+PROCESSING PIPELINE:
+Frame → YOLO Detection → Centroid Tracker → Zone Classification → 
+Count Inside/Outside → Smoothing → Transition Analysis → Segments
+
+TRANSITION RULES:
+- 2→1: Start segment (host exits, comedian alone)
+- 1→2: End segment (host enters)
+- 0→1: Start segment (person appears)
+- 1→0: End segment (person disappears)
+- any→2+: Start segment (multiple people)
+- 2+→1-: End segment (people exit)
+- Stability: Need stable count for 2 frames before triggering
+
+SMOOTHING & STABILITY:
+1. Median filter (window=5 frames)
+   - Reduces detection noise
+   - Prevents false transitions
+
+2. Kalman filter (position only)
+   - Smooths X position tracking
+   - Does NOT affect person count
+
+3. Transition stability
+   - Requires count stable for 2 frames
+   - At 1fps sampling = 2 seconds
+
+FALLBACK DETECTION:
+If no transitions found, uses position-based detection:
+- Tracks X position of detected person
+- When person exits stage edges (< 15% or > 85%), ends segment
+- Ensures clips are found even without clear transitions
+
+TUNING GUIDE:
+
+PROBLEM: Audience detected as comedians
+SOLUTION: Lower bottom boundary value
+  bottom: 0.75 (instead of 0.85)
+
+PROBLEM: Too few detections
+SOLUTION: Lower confidence threshold
+  confidence: 0.4 (instead of 0.5)
+
+PROBLEM: Too many false detections
+SOLUTION: Raise confidence threshold
+  confidence: 0.6 (instead of 0.5)
+
+PROBLEM: Jittery transitions
+SOLUTION: Increase smoothing window
+  smoothing_window: 7 (instead of 5)
+
+PROBLEM: Slow processing
+SOLUTION: Already using nano model (fastest)
+  Consider skipping blur detection if not needed
+
+PERFORMANCE METRICS (for yolov8n):
+- Inference time: ~30-50ms per frame
+- Memory: ~400MB
+- Accuracy: 80%+ for clear, well-lit scenes
+- Processing: ~5-10 minutes for 30-minute video
+
+ALTERNATIVE CONFIGURATIONS:
+
+Config A: Conservative (MediaPipe only)
+- yolo_detection.enabled: false
+- person_count_method: min
+- Pros: Fast, reliable with faces
+- Cons: May miss pose-only detections
+
+Config B: Aggressive (All people)
+- person_count_method: yolo
+- zone_crossing.enabled: false
+- Pros: Counts audience interaction
+- Cons: Cannot distinguish comedians
+
+Config C: Hybrid (Fallback)
+- person_count_method: hybrid
+- yolo_detection.enabled: true
+- Pros: Best of both worlds
+- Cons: Slower (runs multiple detectors)
+
+CONCLUSION:
+Current configuration provides best balance:
+- Reliable person detection via YOLO
+- Audience exclusion via spatial filtering
+- Stable transitions via smoothing
+- Fallback position-based detection if needed
+
+Recommended for: Standard comedy club recordings with 1-2 performers and seated audience.
