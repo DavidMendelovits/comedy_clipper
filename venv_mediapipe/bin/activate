@@ -35,7 +35,7 @@ deactivate () {
 # unset irrelevant variables
 deactivate nondestructive
 
-VIRTUAL_ENV="/Users/davidmendelovits/space/comedy_clipper/.conductor/vaduz/venv_mediapipe"
+VIRTUAL_ENV="/Users/davidmendelovits/space/comedy_clipper/.conductor/toronto/venv_mediapipe"
 export VIRTUAL_ENV
 
 _OLD_VIRTUAL_PATH="$PATH"

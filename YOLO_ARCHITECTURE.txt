@@ -1,0 +1,185 @@
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                 YOLOv8 PERSON DETECTION ARCHITECTURE DIAGRAM                   ║
+╚════════════════════════════════════════════════════════════════════════════════╝
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ INPUT: Video File (30fps typical)                                            │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ CONFIGURATION LAYER (clipper_rules.yaml)                                     │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  YOLO Detection Settings:                Zone Crossing Settings:            │
+│  • enabled: true                         • enabled: true                    │
+│  • model: yolov8n.pt                     • type: rectangle                  │
+│  • confidence: 0.5                       • left: 0.05  (5%)                 │
+│  • max_disappeared: 30 frames            • right: 0.95 (95%)                │
+│                                          • top: 0.0    (0%)                 │
+│  Person Count Method:                    • bottom: 0.85 (85%)               │
+│  • person_count_method: yolo_zone        └─ Excludes audience (bottom 15%)  │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ FRAME PROCESSING (for each sampled frame)                                    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  1. BLUR DETECTION (optional)                                               │
+│     Laplacian variance calculation                                          │
+│     ├─ Sharp frame → proceed                                               │
+│     └─ Blurry frame → flag for boundary shifting                           │
+│                                                                              │
+│  2. YOLO DETECTION                                                           │
+│     Model: YOLOv8 Nano                                                       │
+│     Input: BGR frame                                                         │
+│     ├─ Detect class 0 (PERSON) only                                         │
+│     ├─ Filter by confidence (0.5)                                           │
+│     └─ Output: Bounding boxes [x1, y1, x2, y2]                              │
+│                                                                              │
+│     Example output:                                                          │
+│     ┌────────────────────────────────────────┐                              │
+│     │ Frame analysis:                         │                              │
+│     │ • Person A detected at (150, 200-700)   │                              │
+│     │ • Person B detected at (1800, 150-650) │                              │
+│     │ • Confidence: 0.87, 0.72                │                              │
+│     └────────────────────────────────────────┘                              │
+│                                                                              │
+│  3. CENTROID TRACKER (person_tracker.py)                                     │
+│     Converts boxes to centroids: (cx, cy)                                   │
+│     ├─ Match new centroids to existing tracked objects                      │
+│     ├─ Maintain unique ID for each person                                   │
+│     ├─ Handle disappearances (up to 30 frames)                              │
+│     └─ Output: {ID → (cx, cy)}                                              │
+│                                                                              │
+│  4. ZONE CLASSIFICATION                                                       │
+│     For each centroid (cx, cy), check:                                      │
+│     ┌─────────────────────────────────────────┐                             │
+│     │ if left <= cx <= right AND              │                             │
+│     │    top <= cy <= bottom:                 │                             │
+│     │   zone_state = "inside" (STAGE)         │                             │
+│     │ else:                                   │                             │
+│     │   zone_state = "outside" (AUDIENCE)     │                             │
+│     └─────────────────────────────────────────┘                             │
+│                                                                              │
+│     Visual (1920x1080 frame):                                                │
+│     ┌──────────────────────────────────────────────────────┐                │
+│     │0         96px              1824px        1920         │                │
+│     │ ├─ STAGE AREA (5%→95%) ─────────────────────┤ 5%  │   │                │
+│     │ │                                           │         │                │
+│     │ │          PERFORMERS HERE                  │         │                │
+│     │ │          (inside zone)                    │         │                │
+│     │ │                                           │         │                │
+│     │ ├──────────────────────────────────────────┤ 85%  │   │                │
+│     │ │ AUDIENCE SITTING (outside zone - IGNORED)         │   │                │
+│     │ │ (bottom 15% excluded)                            │   │                │
+│     │ └───────────────────────────────────────────────────┘   │                │
+│     │1080                                         1080         │                │
+│     └──────────────────────────────────────────────────────────┘                │
+│                                                                              │
+│  5. COUNT EXTRACTION                                                         │
+│     person_count_method: yolo_zone                                          │
+│     ├─ inside_count = |{ID: zone_state[ID]=="inside"}|                      │
+│     ├─ outside_count = |{ID: zone_state[ID]=="outside"}|                    │
+│     └─ PERSON_COUNT = inside_count (stage performers only)                  │
+│                                                                              │
+│  6. SMOOTHING (Median Filter)                                                │
+│     Window: 5 frames                                                        │
+│     Input: [1, 2, 1, 1, 2, 1, 2]                                            │
+│     Process: Median filter with window 5                                    │
+│     Output: [1, 1, 1, 1, 1, 1, 1]                                           │
+│     Effect: Removes noise, prevents false transitions                       │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ TRANSITION DETECTION (Person Count Analysis)                                 │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Detection History: [(frame, persons_inside), ...]                           │
+│  Example:                                                                     │
+│    Frame 0: 0 people                                                         │
+│    Frame 1: 0 people                                                         │
+│    Frame 2: 1 person ←── Stable for 2 frames (transition_stability=2)       │
+│    Frame 3: 1 person                                                         │
+│    Frame 4: 2 people ←── Stable for 2 frames                                │
+│    Frame 5: 2 people                                                         │
+│    ...                                                                        │
+│                                                                              │
+│  Apply Rules (config):                                                       │
+│  ┌─────────────────────────────────────────────────────────────┐            │
+│  │ Rule 1: 0→1 (person appears on stage)     = START_SEGMENT   │            │
+│  │ Rule 2: 1→2 (another joins)               = END_SEGMENT     │            │
+│  │ Rule 3: 2→1 (one leaves, solo remains)    = START_SEGMENT   │            │
+│  │ Rule 4: 1→0 (person leaves)               = END_SEGMENT     │            │
+│  └─────────────────────────────────────────────────────────────┘            │
+│                                                                              │
+│  Example Timeline:                                                            │
+│  ┌─────────────────────────────────────────────────────────────┐            │
+│  │ 0s:        0 → 1 (comedian enters)        START CLIP         │            │
+│  │ 5s-120s:   1 person on stage (SET #1)    [CLIPPING]         │            │
+│  │ 120s:      1 → 2 (host joins)            END CLIP #1         │            │
+│  │ 120s-125s: 2 people on stage             [HOST INTRO]        │            │
+│  │ 125s:      2 → 1 (host exits)            START CLIP #2       │            │
+│  │ 125s-300s: 1 person on stage (SET #2)   [CLIPPING]         │            │
+│  │ 300s:      1 → 0 (comedian leaves)       END CLIP #2         │            │
+│  └─────────────────────────────────────────────────────────────┘            │
+│                                                                              │
+│  Output: Segment boundaries [(start, end), ...]                             │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ FALLBACK: POSITION-BASED DETECTION (if no transitions found)                │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Tracks X position of detected person:                                      │
+│  ├─ Person in CENTER of stage (15%-85% of width) → continues segment       │
+│  ├─ Person at EDGES (< 15% or > 85% of width)   → ends segment             │
+│  └─ Person DISAPPEARS                          → ends segment             │
+│                                                                              │
+│  Ensures clips are found even without clear transitions between performers  │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ OUTPUT: Video Clips                                                          │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ video_clips_20251121_120000/                                                │
+│ ├── video_comedian01_3m25s.mp4 (205 seconds)                                │
+│ ├── video_comedian02_4m10s.mp4 (250 seconds)                                │
+│ └── ...                                                                      │
+│                                                                              │
+│ + Debug frames (if enabled):                                                 │
+│ video_debug_20251121_120000/                                                │
+│ ├── seg01_first_frame120_blur45.jpg                                         │
+│ ├── seg01_last_frame3600_blur67.jpg                                         │
+│ └── ...                                                                      │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+
+╔════════════════════════════════════════════════════════════════════════════════╗
+║                         DATA FLOW SUMMARY                                       ║
+╠════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                ║
+║  Video Frame (BGR) ──► YOLO Detection (class 0) ──► Bounding Boxes [x1,y1,x2,y2]║
+║                               ▼                                                 ║
+║                         Centroid Tracker ──► {ID → (cx, cy), zone_state}       ║
+║                               ▼                                                 ║
+║                         Zone Classifier ──► Count inside/outside               ║
+║                               ▼                                                 ║
+║                         Median Smoothing ──► Smoothed person_count             ║
+║                               ▼                                                 ║
+║                         Transition Rules ──► Segment boundaries                ║
+║                               ▼                                                 ║
+║                        Position Fallback (if needed)                           ║
+║                               ▼                                                 ║
+║                         Video Clips + Debug Frames                             ║
+║                                                                                ║
+╚════════════════════════════════════════════════════════════════════════════════╝
+

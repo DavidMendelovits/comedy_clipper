@@ -1,0 +1,81 @@
+{
+  "name": "comedy-clipper-app",
+  "version": "1.0.0",
+  "description": "Desktop app for automatically clipping comedy videos",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build && electron-builder",
+    "preview": "vite preview",
+    "type-check": "tsc --noEmit",
+    "postinstall": "electron-rebuild -f -w better-sqlite3"
+  },
+  "keywords": [
+    "electron",
+    "comedy",
+    "video",
+    "clipper"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.10.0",
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.16",
+    "concurrently": "^8.2.2",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1",
+    "electron-rebuild": "^3.2.9",
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.3.6",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.8",
+    "vite-plugin-electron": "^0.28.0",
+    "vite-plugin-electron-renderer": "^0.14.5",
+    "wait-on": "^7.2.0"
+  },
+  "dependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "better-sqlite3": "^12.4.5",
+    "js-yaml": "^4.1.0",
+    "lucide-react": "^0.294.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "zustand": "^5.0.8"
+  },
+  "build": {
+    "appId": "com.comedy-clipper.app",
+    "productName": "Comedy Clipper",
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "*.py",
+      "*.yaml",
+      "*.sh",
+      "requirements*.txt",
+      "yolov8n.pt"
+    ],
+    "mac": {
+      "category": "public.app-category.video",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    }
+  }
+}

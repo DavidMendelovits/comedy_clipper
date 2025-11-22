@@ -1,8 +1,34 @@
-# Comedy Clipper - Detection Rules Configuration
+# Comedy Clipper - Unified Configuration
 # Edit this file to customize how the clipper detects comedian sets
+# Supports multiple detection modes configurable through 'detection_mode'
 
 # ============================================================================
-# TRANSITION-BASED DETECTION (Primary Mode)
+# DETECTION MODE
+# ============================================================================
+# Choose which detection method to use:
+#   multimodal   - Face + pose detection (best for standup with hosts)
+#   pose         - Pose detection only
+#   face         - Face detection only
+#   mediapipe    - MediaPipe pose tracking (entry/exit detection)
+#   scene        - FFmpeg scene detection (camera cuts)
+#   diarization  - Speaker diarization (requires HF_TOKEN env variable)
+
+detection_mode: multimodal
+
+# ============================================================================
+# SCENE DETECTION (for mode: scene)
+# ============================================================================
+# Detects video cuts between comedians
+
+scene_detection:
+  # Scene change sensitivity (0.0-1.0, lower = more sensitive)
+  threshold: 0.3
+
+  # Maximum gap between scenes to group as one segment (seconds)
+  max_gap: 5.0
+
+# ============================================================================
+# TRANSITION-BASED DETECTION (for modes: multimodal, pose, face, mediapipe)
 # ============================================================================
 # Detects segments based on changes in person count on stage
 # Useful for shows with host introductions
@@ -15,17 +41,19 @@ transition_detection:
   # Actions: "start_segment" or "end_segment"
 
   rules:
-    # Host + Comedian → Host only (comedian exits)
+    # Host + Comedian → Comedian only (host exits)
+    # START CLIPPING - Comedian is now alone on stage
     - from: 2
       to: 1
-      action: end_segment
-      description: "Comedian exits, host remains"
+      action: start_segment
+      description: "Host exits, comedian alone on stage"
 
-    # Host only → Host + Comedian (comedian enters)
+    # Comedian only → Host + Comedian (host enters)
+    # END CLIPPING - Someone joins the comedian
     - from: 1
       to: 2
-      action: start_segment
-      description: "Comedian enters with host"
+      action: end_segment
+      description: "Host enters, end comedian's solo set"
 
     # Empty stage → Person appears (comedian enters alone)
     - from: 0
@@ -39,25 +67,39 @@ transition_detection:
       action: end_segment
       description: "Comedian exits, stage empty"
 
-    # Any count → 2+ people (comedian enters with others)
-    - from: any
-      to: 2+
-      action: start_segment
-      description: "Multiple people on stage"
+    # DISABLED: These broad rules interfere with the main 2→1 and 1→2 detection
+    # They cause segments to start at time 0 and skip intermediate transitions
+    # - from: any
+    #   to: 2+
+    #   action: start_segment
+    #   description: "Multiple people on stage"
 
-    # 2+ people → 0 or 1 (comedian exits with others)
-    - from: 2+
-      to: 1-
-      action: end_segment
-      description: "People exit stage"
+    # - from: 2+
+    #   to: 1-
+    #   action: end_segment
+    #   description: "People exit stage"
 
   # Minimum frames with new count before triggering transition (prevents flicker)
-  transition_stability_frames: 3
+  # Higher value = more stable but slower to detect real transitions
+  # At 1 frame/sec sampling: 2 = 2 seconds, 3 = 3 seconds, 5 = 5 seconds
+  # Note: With median smoothing enabled, lower values work well
+  # LOWERED to 2 to catch brief transitions that get interrupted by 3rd person detections
+  transition_stability_frames: 2  # Catch transitions even if count changes quickly
 
   # Confidence: How to combine face and pose counts
-  # Options: "min" (conservative), "max" (liberal), "average"
-  # Note: Use "max" since MediaPipe Pose only tracks 1 person at a time
-  person_count_method: max
+  # Options:
+  #   "min" - min(faces, poses) - conservative
+  #   "max" - max(faces, poses) - liberal (default for MediaPipe)
+  #   "average" - average of faces and poses
+  #   "yolo" - use YOLO person count (requires yolo_detection.enabled)
+  #   "yolo_zone" - use YOLO count inside stage boundary only (requires zone_crossing.enabled)
+  #   "hybrid" - prefer YOLO if available, fallback to max(faces, poses)
+  person_count_method: yolo_zone  # Changed from yolo to exclude audience
+
+  # Person count smoothing: Apply median filter to reduce detection noise
+  # Helps handle inconsistent face detection (e.g., 88% vs 99% pose detection)
+  person_count_smoothing: true
+  smoothing_window: 7  # Balanced median filter - reduces noise while preserving real transitions
 
 # ============================================================================
 # POSITION-BASED DETECTION (Fallback Mode)
@@ -78,6 +120,76 @@ position_detection:
   # Track position of:
   # Options: "center" (bounding box center), "torso" (pose landmarks)
   tracking_point: torso
+
+# ============================================================================
+# YOLO PERSON DETECTION
+# ============================================================================
+# YOLOv8-based person detection for reliable multi-person tracking
+# More accurate than MediaPipe Face Detection for detecting 2+ people
+
+yolo_detection:
+  # Enable YOLO detector (requires ultralytics package)
+  enabled: true
+
+  # YOLO model to use
+  # Options: yolov8n.pt (nano, fastest), yolov8s.pt (small), yolov8m.pt (medium)
+  model: "yolov8n.pt"
+
+  # Detection confidence threshold (0.0-1.0)
+  confidence: 0.5
+
+  # Maximum frames an object can disappear before deregistration
+  # Higher = more persistent tracking across occlusions
+  max_disappeared_frames: 30
+
+  # Velocity-based exit detection parameters
+  velocity_window: 5  # Number of frames to use for velocity calculation
+  exit_velocity_threshold: 20.0  # Minimum velocity (pixels/frame) toward edge for exit detection
+
+# ============================================================================
+# ZONE CROSSING DETECTION
+# ============================================================================
+# Define stage boundaries and detect when people enter/exit
+# Works best with YOLO detection enabled
+
+zone_crossing:
+  # Enable zone crossing detection
+  enabled: true  # ENABLED to exclude audience in foreground
+
+  # Stage boundary definition
+  stage_boundary:
+    # Type: "rectangle", "polygon", or "ellipse"
+    type: "rectangle"
+
+    # For rectangle: specify bounds (in pixels or as fraction of frame if < 1.0)
+    # These values define the stage area
+    # ADJUSTED FOR FOREGROUND AUDIENCE: excludes bottom 15% where audience heads appear
+    left: 0.05   # 5% from left edge (wide to include full stage)
+    right: 0.95  # 95% from left edge (5% from right)
+    top: 0.0     # Start from very top
+    bottom: 0.85 # Stop at 85% down (excludes bottom 15% where audience is)
+
+    # For polygon: list of [x, y] points defining the boundary (normalized 0-1)
+    # Example: [[0.1, 0.1], [0.9, 0.1], [0.9, 0.85], [0.1, 0.85]]
+    points: []
+
+    # For ellipse: center and size
+    ellipse_center: [0.5, 0.425]  # Center at 50% width, 42.5% height
+    ellipse_width: 0.9  # 90% of frame width
+    ellipse_height: 0.85  # 85% of frame height
+
+  # Buffer zone (pixels) to prevent double-counting from position wobbling
+  buffer_zone: 50
+
+  # Minimum frames person must be inside/outside before counting as stable
+  min_frames_inside: 3
+
+  # Auto-calibration settings
+  auto_calibrate:
+    enabled: false  # Enable automatic zone calibration from first few minutes
+    calibration_duration: 120  # Seconds to observe before calibrating
+    min_samples: 100  # Minimum position samples needed
+    confidence_threshold: 0.7  # Minimum confidence for auto-calibrated zones
 
 # ============================================================================
 # DETECTION CONFIDENCE
@@ -121,7 +233,7 @@ kalman_filter:
 # Uses Laplacian variance to detect sharpness
 
 blur_detection:
-  enabled: true
+  enabled: false  # Disabled for better segment detection (re-enable if clips cut on blurry frames)
 
   # Blur threshold (Laplacian variance)
   # Lower = more strict (more frames considered blurry)
@@ -145,7 +257,7 @@ blur_detection:
 
 filtering:
   # Minimum segment duration (seconds)
-  min_duration: 180.0  # 3 minutes
+  min_duration: 15.0  # 15 seconds minimum to capture shorter segments while filtering noise
 
   # Maximum segment duration (seconds, 0 = no limit)
   max_duration: 0
@@ -155,12 +267,12 @@ filtering:
   min_gap: 5.0
 
   # Auto-merge close segments
-  merge_close_segments: true
+  merge_close_segments: false  # Disabled to keep separate comedian sets
 
   # Time buffer (seconds) to add before/after detected transitions
   # Ensures we don't clip too close to the transition point
-  buffer_before_start: 2.0  # Start clip 2s before transition
-  buffer_after_end: 2.0     # End clip 2s after transition
+  buffer_before_start: 10.0  # Start clip 10s before transition to capture context
+  buffer_after_end: 10.0     # End clip 10s after transition to capture outro
 
 # ============================================================================
 # VIDEO PROCESSING
@@ -174,7 +286,7 @@ processing:
 
   # Adaptive sampling: slow down when person count changes
   adaptive_sampling: true
-  adaptive_rate_on_change: 15  # 2 frames per second during transitions
+  adaptive_rate_on_change: 10  # 3 frames per second during transitions for better capture
 
 # ============================================================================
 # OUTPUT
