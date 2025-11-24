@@ -3,19 +3,26 @@ import { persist, createJSONStorage } from 'zustand/middleware'
 
 // Types
 export interface ClipperConfig {
-  clipperType: 'multimodal' | 'pose' | 'face' | 'mediapipe' | 'scene' | 'diarization'
+  clipperType: 'multimodal' | 'pose' | 'face' | 'mediapipe' | 'scene' | 'diarization' | 'yolo_pose'
   minDuration: number
+  maxDuration: number
   debug: boolean
   outputDir: string
   configFile: string
+  // Position-based detection settings
+  exitThreshold?: number
+  exitStabilityFrames?: number
+  // YOLO-specific settings
+  yoloModel?: 'yolo11n-pose.pt' | 'yolo11s-pose.pt' | 'yolo11m-pose.pt' | 'yolo11l-pose.pt' | 'yolo11x-pose.pt'
+  // Legacy settings (for SettingsModal compatibility)
   yoloEnabled?: boolean
-  personCountMethod?: 'min' | 'max' | 'average' | 'yolo' | 'yolo_zone' | 'hybrid'
+  personCountMethod?: string
   zoneCrossingEnabled?: boolean
   stageBoundary?: {
-    left: number
-    right: number
-    top: number
-    bottom: number
+    left?: number
+    right?: number
+    top?: number
+    bottom?: number
   }
 }
 
@@ -62,6 +69,12 @@ export interface Toast {
   type: 'success' | 'error' | 'info'
 }
 
+export interface ModelComparisonState {
+  running: boolean
+  selectedModels: string[]
+  results: Record<string, any>
+}
+
 // Store interface
 interface AppState {
   // Video state
@@ -80,12 +93,18 @@ interface AppState {
   detectedSegments: VideoSegment[]
   filteredSegments: VideoSegment[]
   debugFrames: any[]
+  debugVideos: string[]
   keyframeMarkers: KeyframeMarker[]
+
+  // Model comparison
+  modelComparison: ModelComparisonState
 
   // UI state
   showSettings: boolean
   showLogs: boolean
   showReviewModal: boolean
+  showModelComparison: boolean
+  showDebugFrameViewer: boolean
   toast: Toast | null
 
   // Actions
@@ -98,11 +117,15 @@ interface AppState {
   setDetectedSegments: (segments: VideoSegment[]) => void
   setFilteredSegments: (segments: VideoSegment[]) => void
   setDebugFrames: (frames: any[]) => void
+  setDebugVideos: (videos: string[]) => void
   addKeyframeMarker: (marker: KeyframeMarker) => void
   clearKeyframeMarkers: () => void
+  setModelComparison: (state: Partial<ModelComparisonState>) => void
   setShowSettings: (show: boolean) => void
   setShowLogs: (show: boolean) => void
   setShowReviewModal: (show: boolean) => void
+  setShowModelComparison: (show: boolean) => void
+  setShowDebugFrameViewer: (show: boolean) => void
   setToast: (toast: Toast | null) => void
   resetProcessing: () => void
 }
@@ -110,19 +133,14 @@ interface AppState {
 // Default values
 const defaultConfig: ClipperConfig = {
   clipperType: 'multimodal',
-  minDuration: 5,
+  minDuration: 30,
+  maxDuration: 600,
   debug: true,
   outputDir: '',
-  configFile: 'clipper_rules.yaml',
-  yoloEnabled: false,
-  personCountMethod: 'max',
-  zoneCrossingEnabled: false,
-  stageBoundary: {
-    left: 0.05,
-    right: 0.95,
-    top: 0.0,
-    bottom: 0.85
-  }
+  configFile: 'clipper_rules_pose_only.yaml',
+  exitThreshold: 0.12,
+  exitStabilityFrames: 2,
+  yoloModel: 'yolo11m-pose.pt' // Default to medium model for balanced performance
 }
 
 const defaultProcessState: ProcessState = {
@@ -174,10 +192,18 @@ export const useAppStore = create<AppState>()(
       detectedSegments: [],
       filteredSegments: [],
       debugFrames: [],
+      debugVideos: [],
       keyframeMarkers: [],
+      modelComparison: {
+        running: false,
+        selectedModels: [],
+        results: {}
+      },
       showSettings: false,
       showLogs: false,
       showReviewModal: false,
+      showModelComparison: false,
+      showDebugFrameViewer: false,
       toast: null,
 
       // Actions
@@ -197,6 +223,7 @@ export const useAppStore = create<AppState>()(
       setDetectedSegments: (segments) => set({ detectedSegments: segments }),
       setFilteredSegments: (segments) => set({ filteredSegments: segments }),
       setDebugFrames: (frames) => set({ debugFrames: frames }),
+      setDebugVideos: (videos) => set({ debugVideos: videos }),
 
       addKeyframeMarker: (marker) => set((state) => ({
         keyframeMarkers: [...state.keyframeMarkers, marker]
@@ -204,9 +231,15 @@ export const useAppStore = create<AppState>()(
 
       clearKeyframeMarkers: () => set({ keyframeMarkers: [] }),
 
+      setModelComparison: (comparisonUpdate) => set((state) => ({
+        modelComparison: { ...state.modelComparison, ...comparisonUpdate }
+      })),
+
       setShowSettings: (show) => set({ showSettings: show }),
       setShowLogs: (show) => set({ showLogs: show }),
       setShowReviewModal: (show) => set({ showReviewModal: show }),
+      setShowModelComparison: (show) => set({ showModelComparison: show }),
+      setShowDebugFrameViewer: (show) => set({ showDebugFrameViewer: show }),
       setToast: (toast) => set({ toast }),
 
       resetProcessing: () => set({
@@ -215,7 +248,13 @@ export const useAppStore = create<AppState>()(
         detectedSegments: [],
         filteredSegments: [],
         debugFrames: [],
-        keyframeMarkers: []
+        debugVideos: [],
+        keyframeMarkers: [],
+        modelComparison: {
+          running: false,
+          selectedModels: [],
+          results: {}
+        }
       })
     }),
     {

@@ -1,0 +1,15 @@
+# OpenPose Detection Requirements
+# Uses OpenCV DNN module (no additional dependencies beyond opencv)
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# NOTE: You must download OpenPose models separately
+# Download from: https://github.com/CMU-Perceptual-Computing-Lab/openpose/tree/master/models
+#
+# For COCO model (18 keypoints):
+# - pose_deploy_linevec.prototxt
+# - pose_iter_440000.caffemodel
+#
+# For MPI model (15 keypoints):
+# - pose_deploy_linevec_faster_4_stages.prototxt
+# - pose_iter_160000.caffemodel

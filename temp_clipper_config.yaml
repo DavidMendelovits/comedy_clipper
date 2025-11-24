@@ -1,0 +1,123 @@
+detection_mode: multimodal
+scene_detection:
+  threshold: 0.3
+  max_gap: 5
+transition_detection:
+  enabled: true
+  rules:
+    - from: 2
+      to: 1
+      action: start_segment
+      description: Host exits, comedian alone on stage
+    - from: 1
+      to: 2
+      action: end_segment
+      description: Host enters, end comedian's solo set
+    - from: 0
+      to: 1
+      action: start_segment
+      description: Comedian enters empty stage
+    - from: 1
+      to: 0
+      action: end_segment
+      description: Comedian exits, stage empty
+  transition_stability_frames: 2
+  person_count_method: yolo_zone
+  person_count_smoothing: true
+  smoothing_window: 7
+position_detection:
+  enabled: true
+  exit_threshold: 0.15
+  exit_stability_frames: 2
+  tracking_point: torso
+yolo_detection:
+  enabled: true
+  model: yolov8n.pt
+  confidence: 0.5
+  max_disappeared_frames: 30
+  velocity_window: 5
+  exit_velocity_threshold: 20
+zone_crossing:
+  enabled: true
+  stage_boundary:
+    type: rectangle
+    left: 0.02
+    right: 1
+    top: 0
+    bottom: 0.82
+    points: []
+    ellipse_center:
+      - 0.5
+      - 0.425
+    ellipse_width: 0.9
+    ellipse_height: 0.85
+  buffer_zone: 50
+  min_frames_inside: 3
+  auto_calibrate:
+    enabled: false
+    calibration_duration: 120
+    min_samples: 100
+    confidence_threshold: 0.7
+confidence:
+  face_detection:
+    min_detection_confidence: 0.5
+    model_selection: 1
+  pose_detection:
+    min_detection_confidence: 0.5
+    min_tracking_confidence: 0.5
+    model_complexity: 1
+    smooth_landmarks: true
+kalman_filter:
+  enabled: true
+  process_noise: 1
+  measurement_noise: 5
+  initial_covariance: 10
+blur_detection:
+  enabled: false
+  threshold: 100
+  boundary_shift_max_frames: 30
+  boundary_sharpness_min: 150
+  log_blurry_frames: false
+filtering:
+  min_duration: 15
+  max_duration: 0
+  min_gap: 5
+  merge_close_segments: false
+  buffer_before_start: 10
+  buffer_after_end: 10
+processing:
+  sample_rate: 30
+  adaptive_sampling: true
+  adaptive_rate_on_change: 10
+output:
+  use_timestamps: true
+  clips_folder_suffix: clips
+  debug_folder_suffix: debug
+  ffmpeg:
+    video_codec: libx264
+    audio_codec: aac
+    preset: fast
+    crf: 23
+debug:
+  export_frames: true
+  export_first_frame: true
+  export_last_frame: true
+  export_transition_frames: false
+  overlays:
+    draw_pose_landmarks: true
+    draw_face_boxes: true
+    draw_stage_boundaries: true
+    draw_position_indicator: true
+    draw_text_info: true
+  text_info:
+    - frame_number
+    - num_faces
+    - num_poses
+    - person_count
+    - confidence_score
+    - position
+    - status
+experimental:
+  motion_based_segmentation: false
+  audio_based_segmentation: false
+  multi_person_tracking: false

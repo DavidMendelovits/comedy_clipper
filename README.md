@@ -2,6 +2,34 @@
 
 Automatically clip standup comedy videos into individual comedian sets.
 
+## 🎯 New Features
+
+### YOLO11/12 Pose Detection + Interactive Video Overlay Player
+
+Two powerful new tools for better visualization and detection:
+
+1. **`clipper_yolo_pose.py`** - YOLO11/12 pose detection clipper
+   - Superior accuracy and speed vs MediaPipe
+   - Multiple model sizes (nano to extra-large)
+   - Real-time pose skeleton visualization
+
+2. **`video_overlay_player.py`** - Interactive video player
+   - See detection overlays in real-time
+   - Toggle YOLO/MediaPipe/Face detection on the fly
+   - Adjust playback speed, seek through video
+   - Perfect for debugging and testing
+
+📖 **[See Full Documentation](YOLO_POSE_README.md)**
+
+**Quick start:**
+```bash
+# Try the interactive player first
+python3 video_overlay_player.py video.mp4
+
+# Process with YOLO pose detection
+python3 clipper_yolo_pose.py video.mp4 --model yolo11m-pose.pt -d
+```
+
 ## Available Clippers
 
 ### 1. **clipper_speaker.py** ⭐ RECOMMENDED for Static Camera

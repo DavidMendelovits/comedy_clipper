@@ -289,14 +289,14 @@ class UnifiedComedyClipper:
             top = stage_boundary.get("top", 0.2)
             bottom = stage_boundary.get("bottom", 0.8)
 
-            # Convert fractions to pixels if needed (values < 1.0 are fractions)
-            if left < 1.0:
+            # Convert fractions to pixels if needed (values <= 1.0 are fractions)
+            if left <= 1.0:
                 left = int(left * frame_width)
-            if right < 1.0:
+            if right <= 1.0:
                 right = int(right * frame_width)
-            if top < 1.0:
+            if top <= 1.0:
                 top = int(top * frame_height)
-            if bottom < 1.0:
+            if bottom <= 1.0:
                 bottom = int(bottom * frame_height)
 
             def check_zone(centroid):
@@ -740,13 +740,18 @@ class UnifiedComedyClipper:
     def _analyze_transitions(self, detection_history, fps, left_edge, right_edge, debug_data, video_path):
         """Analyze transitions based on config rules"""
 
-        # For mediapipe mode, skip transition detection and use position-based only
-        if self.mode == "mediapipe":
+        # Check if transition detection is enabled
+        transition_enabled = self.config.get("transition_detection.enabled", False)
+
+        # For mediapipe mode OR if transition detection disabled, use position-based only
+        if self.mode == "mediapipe" or not transition_enabled:
             print("\nUsing position-based detection (stage entry/exit)...")
             segments = self._position_based_detection(detection_history, fps, left_edge, right_edge)
             # Export debug frames if enabled
             if self.debug and segments:
-                self._export_debug_frames_simple(segments, detection_history, debug_data, left_edge, right_edge, video_path, fps)
+                # Use full debug export with pose overlays
+                segment_frames = []  # Empty for position-based detection
+                self._export_debug_frames(segments, segment_frames, debug_data, left_edge, right_edge, video_path, fps, detection_history)
             return segments
 
         print("\nAnalyzing transitions...")
@@ -878,9 +883,20 @@ class UnifiedComedyClipper:
         return frame_num, frame_num / fps
 
     def _position_based_detection(self, detection_history, fps, left_edge, right_edge):
-        """Fallback position-based detection"""
+        """Position-based detection - clips when someone walks off frame"""
         segments = []
         current_start = None
+        exit_stability_frames = self.config.get("position_detection.exit_stability_frames", 2)
+
+        # Track consecutive frames at edge
+        at_edge_count = 0
+
+        # Enhanced debug logging
+        print(f"\nPosition-based detection parameters:")
+        print(f"  Left edge threshold: {left_edge:.1f} pixels")
+        print(f"  Right edge threshold: {right_edge:.1f} pixels")
+        print(f"  Exit stability frames: {exit_stability_frames}")
+        print(f"  Total detection history frames: {len(detection_history)}")
 
         for i, detection_data in enumerate(detection_history):
             if len(detection_data) >= 7:
@@ -890,22 +906,45 @@ class UnifiedComedyClipper:
 
             time = frame_num / fps
 
-            if position is not None:
-                is_at_edge = position < left_edge or position > right_edge
-                has_person = person_count >= 1
+            # Person detected (either face OR pose, not relying on person_count)
+            has_detection = (num_faces > 0 or num_poses > 0)
 
-                if has_person and not is_at_edge:
+            if position is not None and has_detection:
+                is_at_edge = position < left_edge or position > right_edge
+
+                if is_at_edge:
+                    at_edge_count += 1
+                else:
+                    at_edge_count = 0
+
+                # Start segment when person is NOT at edge
+                if not is_at_edge:
                     if current_start is None:
                         current_start = (time, i)
-                elif current_start is not None:
+                        print(f"  ✓ Segment start at {time:.1f}s (frame {int(frame_num)}, position: {position:.1f}px, in bounds: {left_edge:.1f}-{right_edge:.1f})")
+                # End segment when person has been at edge for stability period
+                elif at_edge_count >= exit_stability_frames and current_start is not None:
                     segments.append((current_start[0], time, current_start[1], i))
+                    print(f"  ✗ Segment end at {time:.1f}s (frame {int(frame_num)}): person at edge (position: {position:.1f}px, stability: {at_edge_count} frames)")
                     current_start = None
+                    at_edge_count = 0
+                elif is_at_edge and current_start is not None and at_edge_count < exit_stability_frames:
+                    # Debug: Show we're tracking an exit but haven't reached stability yet
+                    print(f"    → At edge {time:.1f}s (frame {int(frame_num)}, position: {position:.1f}px, stability: {at_edge_count}/{exit_stability_frames})")
+            # No detection at all - also end segment if one is active
+            elif not has_detection and current_start is not None:
+                segments.append((current_start[0], time, current_start[1], i))
+                print(f"  ✗ Segment end at {time:.1f}s (frame {int(frame_num)}): person disappeared (no faces/poses detected)")
+                current_start = None
+                at_edge_count = 0
 
+        # Close any open segment at end of video
         if current_start is not None:
             final_time = detection_history[-1][0] / fps
             segments.append((current_start[0], final_time, current_start[1], len(detection_history) - 1))
+            print(f"  ✗ Segment end at {final_time:.1f}s: end of video")
 
-        print(f"Detected {len(segments)} segments from position")
+        print(f"\n📊 Detected {len(segments)} segments from position-based detection")
 
         if segments:
             segments = self._adjust_boundaries(segments, detection_history, fps)
@@ -949,30 +988,61 @@ class UnifiedComedyClipper:
             print("Error: Could not open video for debug export")
             return
 
-        # Export timeline frames (every 30 seconds)
-        print("Exporting timeline frames (every 30 seconds)...")
-        timeline_interval = 30 * fps  # Every 30 seconds
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        for frame_num in range(0, frame_count, int(timeline_interval)):
+        # Export timeline frames (every 30 seconds)
+        print("Exporting timeline frames (every 30 seconds)...")
+        timeline_interval = 30  # Every 30 seconds
+
+        # Export frames from detection_history at 30 second intervals
+        exported_count = 0
+        for i, detection_data in enumerate(detection_history):
+            frame_num = int(detection_data[0])
+            time_sec = frame_num / fps
+
+            # Skip if not at 30 second interval
+            if int(time_sec) % timeline_interval != 0:
+                continue
+
+            person_count = detection_data[3] if len(detection_data) > 3 else 0
+
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
             ret, frame = cap.read()
             if not ret:
                 continue
 
-            # Find detection data for this frame
-            time_sec = frame_num / fps
-            person_count = 0
-            for detection_data in detection_history:
-                if abs(detection_data[0] - frame_num) < fps:  # Within 1 second
-                    person_count = detection_data[3] if len(detection_data) > 3 else 0
-                    break
-
             # Draw info overlay
             annotated = frame.copy()
 
+            # Draw pose landmarks and face boxes if available
+            if frame_num in debug_data:
+                frame_debug = debug_data[frame_num]
+                pose_landmarks_list = frame_debug[0] if len(frame_debug) > 0 else []
+                face_detections_list = frame_debug[1] if len(frame_debug) > 1 else []
+
+                # Draw pose landmarks
+                if self.config.get("debug.overlays.draw_pose_landmarks", True):
+                    for pose_landmarks in pose_landmarks_list:
+                        self.mp_drawing.draw_landmarks(
+                            annotated,
+                            pose_landmarks,
+                            self.mp_pose.POSE_CONNECTIONS,
+                            landmark_drawing_spec=self.mp_drawing_styles.get_default_pose_landmarks_style()
+                        )
+
+                # Draw face detection boxes
+                if self.config.get("debug.overlays.draw_face_boxes", True):
+                    for face_detection in face_detections_list:
+                        bbox = face_detection.location_data.relative_bounding_box
+                        h, w = annotated.shape[:2]
+                        x = int(bbox.xmin * w)
+                        y = int(bbox.ymin * h)
+                        width = int(bbox.width * w)
+                        height = int(bbox.height * h)
+                        cv2.rectangle(annotated, (x, y), (x + width, y + height), (0, 255, 0), 2)
+
             # Draw stage boundary polygon if it exists
-            if self.stage_polygon is not None:
+            if self.stage_polygon is not None and self.config.get("debug.overlays.draw_stage_boundaries", False):
                 cv2.polylines(annotated, [self.stage_polygon], True, (255, 0, 0), 3)
                 cv2.putText(annotated, "Stage Boundary", (int(self.stage_polygon[0][0]), int(self.stage_polygon[0][1]) - 10),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
@@ -1014,6 +1084,9 @@ class UnifiedComedyClipper:
 
             output_path = timeline_dir / f"frame_{int(time_sec):04d}s.jpg"
             cv2.imwrite(str(output_path), annotated)
+            exported_count += 1
+
+        print(f"Exported {exported_count} timeline frames")
 
         # Export transition frames (where person count changes)
         print("Exporting transition frames...")
@@ -1051,6 +1124,34 @@ class UnifiedComedyClipper:
                             break
 
                     annotated = frame.copy()
+
+                    # Draw pose landmarks and face boxes if available
+                    if export_frame_num in debug_data:
+                        frame_debug = debug_data[export_frame_num]
+                        pose_landmarks_list = frame_debug[0] if len(frame_debug) > 0 else []
+                        face_detections_list = frame_debug[1] if len(frame_debug) > 1 else []
+
+                        # Draw pose landmarks
+                        if self.config.get("debug.overlays.draw_pose_landmarks", True):
+                            for pose_landmarks in pose_landmarks_list:
+                                self.mp_drawing.draw_landmarks(
+                                    annotated,
+                                    pose_landmarks,
+                                    self.mp_pose.POSE_CONNECTIONS,
+                                    landmark_drawing_spec=self.mp_drawing_styles.get_default_pose_landmarks_style()
+                                )
+
+                        # Draw face detection boxes
+                        if self.config.get("debug.overlays.draw_face_boxes", True):
+                            for face_detection in face_detections_list:
+                                bbox = face_detection.location_data.relative_bounding_box
+                                h, w = annotated.shape[:2]
+                                x = int(bbox.xmin * w)
+                                y = int(bbox.ymin * h)
+                                width = int(bbox.width * w)
+                                height = int(bbox.height * h)
+                                cv2.rectangle(annotated, (x, y), (x + width, y + height), (0, 255, 0), 2)
+
                     color = (0, 0, 255) if is_transition else (0, 255, 0)
 
                     cv2.putText(annotated, f"Transition #{transition_num}: {prev_count}->{person_count} people",
@@ -1073,10 +1174,39 @@ class UnifiedComedyClipper:
         print("Exporting segment boundary frames...")
         for i, (start, end, start_idx, end_idx) in enumerate(segments, 1):
             # Export start frame
-            cap.set(cv2.CAP_PROP_POS_FRAMES, int(start * fps))
+            start_frame_num = int(start * fps)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame_num)
             ret, frame = cap.read()
             if ret:
                 annotated = frame.copy()
+
+                # Draw pose landmarks and face boxes if available
+                if start_frame_num in debug_data:
+                    frame_debug = debug_data[start_frame_num]
+                    pose_landmarks_list = frame_debug[0] if len(frame_debug) > 0 else []
+                    face_detections_list = frame_debug[1] if len(frame_debug) > 1 else []
+
+                    # Draw pose landmarks
+                    if self.config.get("debug.overlays.draw_pose_landmarks", True):
+                        for pose_landmarks in pose_landmarks_list:
+                            self.mp_drawing.draw_landmarks(
+                                annotated,
+                                pose_landmarks,
+                                self.mp_pose.POSE_CONNECTIONS,
+                                landmark_drawing_spec=self.mp_drawing_styles.get_default_pose_landmarks_style()
+                            )
+
+                    # Draw face detection boxes
+                    if self.config.get("debug.overlays.draw_face_boxes", True):
+                        for face_detection in face_detections_list:
+                            bbox = face_detection.location_data.relative_bounding_box
+                            h, w = annotated.shape[:2]
+                            x = int(bbox.xmin * w)
+                            y = int(bbox.ymin * h)
+                            width = int(bbox.width * w)
+                            height = int(bbox.height * h)
+                            cv2.rectangle(annotated, (x, y), (x + width, y + height), (0, 255, 0), 2)
+
                 cv2.putText(annotated, f"Segment {i} START", (10, 30),
                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                 cv2.putText(annotated, f"Time: {start:.1f}s", (10, 70),
@@ -1085,10 +1215,39 @@ class UnifiedComedyClipper:
                 cv2.imwrite(str(output_path), annotated)
 
             # Export end frame
-            cap.set(cv2.CAP_PROP_POS_FRAMES, int(end * fps))
+            end_frame_num = int(end * fps)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, end_frame_num)
             ret, frame = cap.read()
             if ret:
                 annotated = frame.copy()
+
+                # Draw pose landmarks and face boxes if available
+                if end_frame_num in debug_data:
+                    frame_debug = debug_data[end_frame_num]
+                    pose_landmarks_list = frame_debug[0] if len(frame_debug) > 0 else []
+                    face_detections_list = frame_debug[1] if len(frame_debug) > 1 else []
+
+                    # Draw pose landmarks
+                    if self.config.get("debug.overlays.draw_pose_landmarks", True):
+                        for pose_landmarks in pose_landmarks_list:
+                            self.mp_drawing.draw_landmarks(
+                                annotated,
+                                pose_landmarks,
+                                self.mp_pose.POSE_CONNECTIONS,
+                                landmark_drawing_spec=self.mp_drawing_styles.get_default_pose_landmarks_style()
+                            )
+
+                    # Draw face detection boxes
+                    if self.config.get("debug.overlays.draw_face_boxes", True):
+                        for face_detection in face_detections_list:
+                            bbox = face_detection.location_data.relative_bounding_box
+                            h, w = annotated.shape[:2]
+                            x = int(bbox.xmin * w)
+                            y = int(bbox.ymin * h)
+                            width = int(bbox.width * w)
+                            height = int(bbox.height * h)
+                            cv2.rectangle(annotated, (x, y), (x + width, y + height), (0, 255, 0), 2)
+
                 cv2.putText(annotated, f"Segment {i} END", (10, 30),
                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                 cv2.putText(annotated, f"Time: {end:.1f}s", (10, 70),
@@ -1223,6 +1382,96 @@ class UnifiedComedyClipper:
 
         return clip_files
 
+    def _generate_overlay_video(self, video_path: str, output_dir: str = None, json_output: bool = False) -> str:
+        """
+        Generate overlay video with pose detection visualizations using video_overlay_player.py
+
+        Args:
+            video_path: Path to input video
+            output_dir: Directory to save overlay video (default: same as video)
+            json_output: Whether to suppress print output
+
+        Returns:
+            Path to generated overlay video, or None if generation failed
+        """
+        import sys
+
+        # Determine output path
+        if output_dir is None:
+            output_dir = str(Path(video_path).parent)
+
+        video_name = Path(video_path).stem
+        overlay_output = Path(output_dir) / f"{video_name}_overlay.mp4"
+
+        # Path to video_overlay_player.py script
+        script_dir = Path(__file__).parent
+        overlay_script = script_dir / "video_overlay_player.py"
+
+        if not overlay_script.exists():
+            if not json_output:
+                print(f"[WARNING] Overlay script not found: {overlay_script}")
+            return None
+
+        # Build command to generate overlay video
+        # Use the same detection mode as the clipper
+        detection_modes = []
+        if self.mode == 'yolo_pose' or self.mode == 'pose':
+            detection_modes.append('yolo_pose')
+        elif self.mode == 'multimodal':
+            detection_modes.extend(['yolo_pose', 'mediapipe_face'])
+        elif self.mode == 'face':
+            detection_modes.append('mediapipe_face')
+        else:
+            detection_modes.append('yolo_pose')  # default
+
+        cmd = [
+            sys.executable,
+            str(overlay_script),
+            video_path,
+            '--export',
+            '--output', str(overlay_output),
+            '--detections', *detection_modes,
+        ]
+
+        # Add overlay configuration options
+        if not self.config.get("overlay_include_skeletons", True):
+            cmd.append('--no-yolo')
+            cmd.append('--no-mediapipe-pose')
+
+        if not self.config.get("overlay_show_info", True):
+            cmd.append('--no-info')
+
+        try:
+            if not json_output:
+                print(f"Generating overlay video: {overlay_output}")
+                print(f"Command: {' '.join(cmd)}")
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)  # 1 hour timeout
+
+            if result.returncode == 0:
+                # The script might return the final H.264 path
+                if overlay_output.exists():
+                    return str(overlay_output)
+                else:
+                    # Check for _h264 version
+                    h264_output = overlay_output.parent / f"{overlay_output.stem}_h264.mp4"
+                    if h264_output.exists():
+                        return str(h264_output)
+            else:
+                if not json_output:
+                    print(f"[WARNING] Overlay generation failed with code {result.returncode}")
+                    print(f"STDERR: {result.stderr}")
+                return None
+
+        except subprocess.TimeoutExpired:
+            if not json_output:
+                print(f"[WARNING] Overlay generation timed out after 1 hour")
+            return None
+        except Exception as e:
+            if not json_output:
+                print(f"[WARNING] Overlay generation error: {e}")
+            return None
+
     def process_video(self, video_path: str, output_dir: str = None, json_output: bool = False) -> dict:
         """
         Complete pipeline - returns structured result
@@ -1286,6 +1535,23 @@ class UnifiedComedyClipper:
             result['debug_dir'] = self.debug_dir  # Include debug directory if frames were exported
             result['success'] = True
 
+            # Generate overlay video if requested
+            export_overlay = self.config.get("export_overlay_video", False)
+            if export_overlay:
+                if not json_output:
+                    print(f"[STEP] Generating overlay video...")
+
+                try:
+                    overlay_video_path = self._generate_overlay_video(video_path, output_dir or str(Path(clips[0]).parent) if clips else None, json_output)
+                    if overlay_video_path:
+                        result['overlay_video'] = overlay_video_path
+                        if not json_output:
+                            print(f"[STEP] Overlay video created: {overlay_video_path}")
+                except Exception as e:
+                    if not json_output:
+                        print(f"[WARNING] Failed to generate overlay video: {e}")
+                    # Don't fail the entire job if overlay generation fails
+
             if not json_output:
                 print(f"[STEP] Processing complete - {len(clips)} clips created")
 
@@ -1343,6 +1609,14 @@ Configuration:
     parser.add_argument('--min-duration', type=float, help='Override minimum duration (seconds)')
     parser.add_argument('--json', action='store_true', help='Output results as JSON')
 
+    # Overlay video generation options
+    parser.add_argument('--export-overlay', action='store_true',
+                       help='Export full video with pose detection overlays')
+    parser.add_argument('--no-overlay-skeletons', action='store_true',
+                       help='Disable skeleton overlays in overlay video')
+    parser.add_argument('--overlay-show-info', action='store_true',
+                       help='Show info overlay in overlay video (default: True)')
+
     args = parser.parse_args()
 
     if not os.path.exists(args.video):
@@ -1363,6 +1637,12 @@ Configuration:
         # Override min duration if specified
         if args.min_duration is not None:
             config.raw.setdefault("filtering", {})["min_duration"] = args.min_duration
+
+        # Override overlay settings if specified
+        if args.export_overlay:
+            config.raw["export_overlay_video"] = True
+            config.raw["overlay_include_skeletons"] = not args.no_overlay_skeletons
+            config.raw["overlay_show_info"] = args.overlay_show_info
 
         # Create clipper
         clipper = UnifiedComedyClipper(config, mode=args.mode, debug=args.debug)
