@@ -3,18 +3,25 @@
  * Detailed view of a specific job including results
  */
 
-import { useEffect } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, X, Trash2, CheckCircle, XCircle, Clock, Loader2 } from 'lucide-react';
+import { ArrowLeft, X, Trash2, CheckCircle, XCircle, Clock, Loader2, Download } from 'lucide-react';
 import { useJobsStore } from '../stores/jobsStore';
 import { ResultsTab } from '../components/tabs/ResultsTab';
-import { useResultsStore, useComparisonStore } from '../stores';
+import { PoseVideoPlayer } from '../components/PoseVideoPlayer';
+import { useResultsStore, useComparisonStore, useSettingsStore, useUIStore } from '../stores';
 
 export function JobDetailPage() {
   const { jobId } = useParams<{ jobId: string }>();
   const navigate = useNavigate();
 
+  const [isExportingOverlay, setIsExportingOverlay] = useState(false);
+  const logsContainerRef = useRef<HTMLDivElement>(null);
+  const previousLogsLengthRef = useRef<number>(0);
+
   const jobs = useJobsStore((state) => state.jobs);
+  const overlayConfig = useSettingsStore((state) => state.overlayConfig);
+  const showToast = useUIStore((state) => state.showToast);
 
   // Get job from state, or fetch if not loaded
   const job = jobId ? jobs[jobId] : undefined;
@@ -59,6 +66,17 @@ export function JobDetailPage() {
       }
     }
   }, [job]);
+
+  // Auto-scroll logs to bottom when new logs arrive
+  useEffect(() => {
+    if (job?.logs && job.logs.length > previousLogsLengthRef.current) {
+      // New logs arrived, scroll to bottom
+      if (logsContainerRef.current) {
+        logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
+      }
+      previousLogsLengthRef.current = job.logs.length;
+    }
+  }, [job?.logs?.length]);
 
   if (!job) {
     return (
@@ -107,6 +125,87 @@ export function JobDetailPage() {
     }
   };
 
+  const handleExportOverlay = async () => {
+    if (!job || !job.videoPath) {
+      showToast('Video path not available', 'error');
+      return;
+    }
+
+    setIsExportingOverlay(true);
+    showToast('Exporting overlay video...', 'info');
+
+    try {
+      const result = await window.electron.exportOverlayVideo({
+        videoPath: job.videoPath,
+        overlayConfig: {
+          includeSkeletons: overlayConfig.includeSkeletons,
+          includeBoundingBoxes: overlayConfig.includeBoundingBoxes,
+          includeInfoOverlay: overlayConfig.includeInfoOverlay,
+          includeStageMarkers: overlayConfig.includeStageMarkers,
+          opacity: overlayConfig.opacity,
+        },
+      });
+
+      if (result.success && result.outputPath) {
+        showToast('Overlay video exported successfully', 'success');
+        // Open the file in Finder
+        await window.electron.openInFinder(result.outputPath);
+      } else {
+        showToast(`Export failed: ${result.error || 'Unknown error'}`, 'error');
+      }
+    } catch (error: any) {
+      console.error('Error exporting overlay video:', error);
+      showToast(`Export failed: ${error.message}`, 'error');
+    } finally {
+      setIsExportingOverlay(false);
+    }
+  };
+
+  const handleViewWithOverlay = async () => {
+    if (!job || !job.videoPath) {
+      showToast('Video path not available', 'error');
+      return;
+    }
+
+    showToast('Opening overlay player...', 'info');
+
+    try {
+      // Use the video overlay player Python script to open an interactive player
+      const scriptPath = 'video_overlay_player.py';
+      const result = await window.electron.openFile(job.videoPath);
+
+      if (!result.success) {
+        showToast(`Failed to open player: ${result.error}`, 'error');
+      }
+    } catch (error: any) {
+      console.error('Error opening overlay player:', error);
+      showToast(`Failed to open player: ${error.message}`, 'error');
+    }
+  };
+
+  // Memoize logs rendering to prevent flickering on job updates
+  const logsContent = useMemo(() => {
+    if (!job?.logs || job.logs.length === 0) return null;
+
+    return job.logs.map((log, index) => (
+      <div
+        key={`${log.timestamp}-${index}`} // Stable key using timestamp
+        className={`${
+          log.level === 'error'
+            ? 'text-[var(--color-error)]'
+            : log.level === 'warning'
+            ? 'text-[var(--color-warning)]'
+            : 'text-[var(--color-text-secondary)]'
+        }`}
+      >
+        <span className="text-[var(--color-text-muted)]">
+          [{new Date(log.timestamp).toLocaleTimeString()}]
+        </span>{' '}
+        {log.message}
+      </div>
+    ));
+  }, [job?.logs]);
+
   return (
     <div className="h-full overflow-auto">
       <div className="max-w-7xl mx-auto p-8 space-y-6">
@@ -131,6 +230,25 @@ export function JobDetailPage() {
 
           {/* Actions */}
           <div className="flex gap-2">
+            {job.status === 'completed' && (
+              <button
+                onClick={handleExportOverlay}
+                disabled={isExportingOverlay}
+                className="flex items-center gap-2 px-4 py-2 bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isExportingOverlay ? (
+                  <>
+                    <Loader2 size={18} className="animate-spin" />
+                    Exporting...
+                  </>
+                ) : (
+                  <>
+                    <Download size={18} />
+                    Export Overlay Video
+                  </>
+                )}
+              </button>
+            )}
             {job.status === 'running' && (
               <button
                 onClick={handleCancel}
@@ -232,6 +350,16 @@ export function JobDetailPage() {
           </div>
         </div>
 
+        {/* Video Preview */}
+        {job.videoPath && (
+          <div className="space-y-4">
+            <h3 className="text-xl font-semibold text-[var(--color-text-primary)]">
+              Original Video
+            </h3>
+            <PoseVideoPlayer videoPath={job.videoPath} />
+          </div>
+        )}
+
         {/* Results (if completed) */}
         {job.status === 'completed' && job.result && 'clips' in job.result && (
           <div>
@@ -240,29 +368,16 @@ export function JobDetailPage() {
         )}
 
         {/* Logs */}
-        {job.logs && job.logs.length > 0 && (
+        {logsContent && (
           <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-lg p-6">
             <h3 className="text-xl font-semibold text-[var(--color-text-primary)] mb-4">
-              Logs ({job.logs.length})
+              Logs ({job.logs?.length || 0})
             </h3>
-            <div className="max-h-96 overflow-y-auto space-y-1 font-mono text-sm">
-              {job.logs.map((log, index) => (
-                <div
-                  key={index}
-                  className={`${
-                    log.level === 'error'
-                      ? 'text-[var(--color-error)]'
-                      : log.level === 'warning'
-                      ? 'text-[var(--color-warning)]'
-                      : 'text-[var(--color-text-secondary)]'
-                  }`}
-                >
-                  <span className="text-[var(--color-text-muted)]">
-                    [{new Date(log.timestamp).toLocaleTimeString()}]
-                  </span>{' '}
-                  {log.message}
-                </div>
-              ))}
+            <div
+              ref={logsContainerRef}
+              className="max-h-96 overflow-y-auto space-y-1 font-mono text-sm"
+            >
+              {logsContent}
             </div>
           </div>
         )}
