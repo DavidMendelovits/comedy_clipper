@@ -5,9 +5,10 @@
 
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Filter } from 'lucide-react';
+import { Search, Filter, Video, ArrowRight, FolderOpen } from 'lucide-react';
 import { useJobsStore } from '../stores/jobsStore';
 import type { JobStatus } from '../types/jobs';
+import { JobsListSkeleton } from '../components/SkeletonLoader';
 
 export function JobHistoryPage() {
   const navigate = useNavigate();
@@ -110,14 +111,48 @@ export function JobHistoryPage() {
 
         {/* Jobs List */}
         {loading ? (
-          <div className="text-center py-12 text-[var(--color-text-muted)]">
-            Loading jobs...
-          </div>
+          <JobsListSkeleton count={5} />
         ) : sortedJobs.length === 0 ? (
-          <div className="text-center py-12 text-[var(--color-text-muted)]">
-            {searchQuery || statusFilter !== 'all'
-              ? 'No jobs match your filters'
-              : 'No jobs yet. Process a video to get started!'}
+          <div className="flex flex-col items-center justify-center py-16">
+            <div className="bg-[var(--color-bg-secondary)] border-2 border-dashed border-[var(--color-border)] rounded-lg p-12 max-w-md text-center">
+              {searchQuery || statusFilter !== 'all' ? (
+                <>
+                  <FolderOpen className="mx-auto text-[var(--color-text-muted)] mb-4" size={64} />
+                  <h3 className="text-xl font-semibold text-[var(--color-text-primary)] mb-2">
+                    No jobs found
+                  </h3>
+                  <p className="text-[var(--color-text-muted)] mb-6">
+                    No jobs match your current filters. Try adjusting your search or filter criteria.
+                  </p>
+                  <button
+                    onClick={() => {
+                      setSearchQuery('');
+                      setStatusFilter('all');
+                    }}
+                    className="px-4 py-2 bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-hover)] border border-[var(--color-border)] text-[var(--color-text-primary)] rounded-lg transition-colors"
+                  >
+                    Clear Filters
+                  </button>
+                </>
+              ) : (
+                <>
+                  <Video className="mx-auto text-[var(--color-text-muted)] mb-4" size={64} />
+                  <h3 className="text-xl font-semibold text-[var(--color-text-primary)] mb-2">
+                    No jobs yet
+                  </h3>
+                  <p className="text-[var(--color-text-muted)] mb-6">
+                    Get started by processing your first comedy video! Head to the Process tab to begin.
+                  </p>
+                  <button
+                    onClick={() => navigate('/process')}
+                    className="inline-flex items-center gap-2 px-6 py-3 bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white rounded-lg transition-colors font-medium"
+                  >
+                    Process Video
+                    <ArrowRight size={18} />
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         ) : (
           <div className="space-y-2">
@@ -125,7 +160,7 @@ export function JobHistoryPage() {
               <div
                 key={job.id}
                 onClick={() => navigate(`/jobs/${job.id}`)}
-                className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-lg p-4 hover:border-[var(--color-primary)] transition-colors cursor-pointer"
+                className="group bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-lg p-4 hover:border-[var(--color-primary)] hover:shadow-lg transition-all cursor-pointer transform hover:-translate-y-0.5"
               >
                 <div className="flex items-center justify-between">
                   <div className="flex-1">

@@ -3,6 +3,7 @@
  */
 
 import { createHashRouter } from 'react-router-dom';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { AppLayout } from './components/layout/AppLayout';
 import { DashboardPage } from './pages/DashboardPage';
 import { ProcessPage } from './pages/ProcessPage';
@@ -14,31 +15,59 @@ import { SettingsPage } from './pages/SettingsPage';
 export const router = createHashRouter([
   {
     path: '/',
-    element: <AppLayout />,
+    element: (
+      <ErrorBoundary>
+        <AppLayout />
+      </ErrorBoundary>
+    ),
     children: [
       {
         index: true,
-        element: <DashboardPage />,
+        element: (
+          <ErrorBoundary>
+            <DashboardPage />
+          </ErrorBoundary>
+        ),
       },
       {
         path: 'process',
-        element: <ProcessPage />,
+        element: (
+          <ErrorBoundary>
+            <ProcessPage />
+          </ErrorBoundary>
+        ),
       },
       {
         path: 'jobs',
-        element: <JobHistoryPage />,
+        element: (
+          <ErrorBoundary>
+            <JobHistoryPage />
+          </ErrorBoundary>
+        ),
       },
       {
         path: 'jobs/:jobId',
-        element: <JobDetailPage />,
+        element: (
+          <ErrorBoundary>
+            <JobDetailPage />
+          </ErrorBoundary>
+        ),
       },
       {
         path: 'compare',
-        element: <ComparePage />,
+        element: (
+          <ErrorBoundary>
+            <ComparePage />
+          </ErrorBoundary>
+        ),
       },
       {
         path: 'settings',
-        element: <SettingsPage />,
+        element: (
+          <ErrorBoundary>
+            <SettingsPage />
+          </ErrorBoundary>
+        ),
       },
     ],
   },

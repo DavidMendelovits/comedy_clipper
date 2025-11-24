@@ -43,6 +43,11 @@ contextBridge.exposeInMainWorld('electron', {
   setStorageItem: (key: string, value: string) => ipcRenderer.invoke('set-storage-item', key, value),
   removeStorageItem: (key: string) => ipcRenderer.invoke('remove-storage-item', key),
 
+  // Cache management
+  getCacheStats: () => ipcRenderer.invoke('get-cache-stats'),
+  clearCache: () => ipcRenderer.invoke('clear-cache'),
+  getCachedVideos: () => ipcRenderer.invoke('get-cached-videos'),
+
   // Convert file path to video protocol URL (legacy)
   getVideoUrl: (filePath: string) => `video://${encodeURIComponent(filePath)}`,
 

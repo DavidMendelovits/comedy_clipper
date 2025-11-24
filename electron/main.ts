@@ -1517,6 +1517,99 @@ ipcMain.handle('save-file', async (_event, sourceFile: string, suggestedName: st
   return { success: false, error: 'Cancelled' }
 })
 
+// Cache Management IPC Handlers
+ipcMain.handle('get-cache-stats', async () => {
+  try {
+    const pythonPath = findPythonPath()
+    const scriptPath = path.join(getResourcePath(), 'python_backend', 'cache_cli.py')
+
+    const result = await new Promise<any>((resolve, reject) => {
+      const process = spawn(pythonPath, [scriptPath, 'stats'])
+      let output = ''
+
+      process.stdout?.on('data', (data) => {
+        output += data.toString()
+      })
+
+      process.on('close', (code) => {
+        if (code === 0) {
+          try {
+            const stats = JSON.parse(output)
+            resolve(stats)
+          } catch (error) {
+            reject(new Error('Failed to parse cache stats'))
+          }
+        } else {
+          reject(new Error(`Cache stats command failed with code ${code}`))
+        }
+      })
+    })
+
+    return result
+  } catch (error: any) {
+    console.error('Error getting cache stats:', error)
+    return { entry_count: 0, total_size_mb: 0, error: error.message }
+  }
+})
+
+ipcMain.handle('clear-cache', async () => {
+  try {
+    const pythonPath = findPythonPath()
+    const scriptPath = path.join(getResourcePath(), 'python_backend', 'cache_cli.py')
+
+    await new Promise<void>((resolve, reject) => {
+      const process = spawn(pythonPath, [scriptPath, 'clear'])
+
+      process.on('close', (code) => {
+        if (code === 0) {
+          resolve()
+        } else {
+          reject(new Error(`Clear cache command failed with code ${code}`))
+        }
+      })
+    })
+
+    return { success: true }
+  } catch (error: any) {
+    console.error('Error clearing cache:', error)
+    return { success: false, error: error.message }
+  }
+})
+
+ipcMain.handle('get-cached-videos', async () => {
+  try {
+    const pythonPath = findPythonPath()
+    const scriptPath = path.join(getResourcePath(), 'python_backend', 'cache_cli.py')
+
+    const result = await new Promise<any[]>((resolve, reject) => {
+      const process = spawn(pythonPath, [scriptPath, 'list'])
+      let output = ''
+
+      process.stdout?.on('data', (data) => {
+        output += data.toString()
+      })
+
+      process.on('close', (code) => {
+        if (code === 0) {
+          try {
+            const videos = JSON.parse(output)
+            resolve(videos)
+          } catch (error) {
+            reject(new Error('Failed to parse cached videos'))
+          }
+        } else {
+          reject(new Error(`List cache command failed with code ${code}`))
+        }
+      })
+    })
+
+    return result
+  } catch (error: any) {
+    console.error('Error getting cached videos:', error)
+    return []
+  }
+})
+
 function parseOutputForClips(output: string, baseDir: string): Array<{ name: string; path: string }> {
   const clips: Array<{ name: string; path: string }> = []
 
