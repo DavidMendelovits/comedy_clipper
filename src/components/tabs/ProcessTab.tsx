@@ -1,10 +1,11 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Settings2, Play, Square } from 'lucide-react';
+import { Play, Square } from 'lucide-react';
 import DropZone from '../DropZone';
 import { ModelCard, type ModelInfo } from '../ModelCard';
 import ProgressPanel from '../ProgressPanel';
 import VideoPreview from '../VideoPreview';
+import { AdvancedParameters } from '../AdvancedParameters';
 import { useVideoStore } from '../../stores/videoStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useProcessingStore } from '../../stores/processingStore';
@@ -131,6 +132,11 @@ export function ProcessTab() {
           personCountMethod: config.personCountMethod,
           zoneCrossingEnabled: config.zoneCrossingEnabled,
           configFile: config.configFile,
+          // Advanced parameters
+          mergeThreshold: config.mergeThreshold,
+          bufferBefore: config.bufferBefore,
+          bufferAfter: config.bufferAfter,
+          blurDetectionEnabled: config.blurDetectionEnabled,
           // Overlay video settings
           exportOverlayVideo: overlayConfig.exportFullVideo,
           overlayIncludeSkeletons: overlayConfig.includeSkeletons,
@@ -245,48 +251,9 @@ export function ProcessTab() {
               </div>
             )}
 
-            {/* Settings */}
+            {/* Advanced Parameters */}
             {!isProcessing && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-2xl font-bold text-[var(--color-text-primary)]">
-                    Settings
-                  </h2>
-                  <button
-                    onClick={() => setShowSettings(true)}
-                    className="flex items-center gap-2 text-sm text-[var(--color-primary)] hover:text-[var(--color-primary-hover)] transition-colors"
-                  >
-                    <Settings2 size={16} />
-                    Advanced Settings
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-lg p-4">
-                    <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-2">
-                      Min Duration (seconds)
-                    </label>
-                    <input
-                      type="number"
-                      value={config.minDuration}
-                      onChange={(e) => setConfig({ minDuration: parseInt(e.target.value) })}
-                      className="w-full bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded px-3 py-2 text-[var(--color-text-primary)]"
-                    />
-                  </div>
-
-                  <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-lg p-4">
-                    <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-2">
-                      Max Duration (seconds)
-                    </label>
-                    <input
-                      type="number"
-                      value={config.maxDuration}
-                      onChange={(e) => setConfig({ maxDuration: parseInt(e.target.value) })}
-                      className="w-full bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded px-3 py-2 text-[var(--color-text-primary)]"
-                    />
-                  </div>
-                </div>
-              </div>
+              <AdvancedParameters config={config} setConfig={setConfig} />
             )}
 
             {/* Process Button */}
