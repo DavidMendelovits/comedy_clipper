@@ -4,14 +4,28 @@
 
 @layer base {
   :root {
-    /* Design tokens */
-    --color-bg-primary: #0f172a;
-    --color-bg-secondary: #1e293b;
-    --color-bg-tertiary: #334155;
-    --color-border: rgba(71, 85, 105, 0.3);
-    --color-text-primary: rgba(255, 255, 255, 0.95);
-    --color-text-secondary: rgba(226, 232, 240, 0.8);
-    --color-text-tertiary: rgba(148, 163, 184, 0.6);
+    /* New Modern Color Scheme */
+    --color-bg-primary: #09090b;      /* Zinc-950 - Deep rich black */
+    --color-bg-secondary: #18181b;     /* Zinc-900 - Surface elevation */
+    --color-bg-tertiary: #27272a;      /* Zinc-800 - Card backgrounds */
+    --color-border: #27272a;           /* Zinc-800 - Soft separation */
+    --color-border-light: rgba(39, 39, 42, 0.5); /* Subtle borders */
+
+    --color-text-primary: #fafafa;     /* Zinc-50 - High contrast */
+    --color-text-secondary: #e4e4e7;   /* Zinc-200 - Secondary text */
+    --color-text-muted: #a1a1aa;       /* Zinc-400 - De-emphasized */
+
+    --color-primary: #6366f1;          /* Indigo-500 - Primary actions */
+    --color-primary-hover: #4f46e5;    /* Indigo-600 - Hover state */
+    --color-primary-light: rgba(99, 102, 241, 0.1); /* Primary background */
+
+    --color-accent: #10b981;           /* Emerald-500 - Success/Active */
+    --color-accent-hover: #059669;     /* Emerald-600 - Hover state */
+    --color-accent-light: rgba(16, 185, 129, 0.1); /* Accent background */
+
+    --color-warning: #f59e0b;          /* Amber-500 */
+    --color-error: #ef4444;            /* Red-500 */
+
     --radius-sm: 0.5rem;
     --radius-md: 0.75rem;
     --radius-lg: 1rem;
@@ -61,13 +75,13 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg, #475569 0%, #64748b 100%);
+    background: linear-gradient(180deg, var(--color-border) 0%, #3f3f46 100%);
     border-radius: 10px;
     border: 2px solid var(--color-bg-secondary);
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(180deg, #64748b 0%, #94a3b8 100%);
+    background: linear-gradient(180deg, #3f3f46 0%, #52525b 100%);
   }
 
   ::-webkit-scrollbar-corner {
@@ -84,13 +98,13 @@
 
   /* Selection styling */
   ::selection {
-    background-color: rgba(14, 165, 233, 0.3);
-    color: rgba(255, 255, 255, 0.95);
+    background-color: var(--color-primary-light);
+    color: var(--color-text-primary);
   }
 
   /* Focus visible for keyboard navigation */
   *:focus-visible {
-    outline: 2px solid #0ea5e9;
+    outline: 2px solid var(--color-primary);
     outline-offset: 2px;
   }
 
@@ -114,7 +128,7 @@
 @layer utilities {
   /* Gradient text utility */
   .text-gradient {
-    background: linear-gradient(135deg, #0ea5e9 0%, #38bdf8 100%);
+    background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -122,10 +136,10 @@
 
   /* Glass morphism utility */
   .glass {
-    background: rgba(30, 41, 59, 0.6);
+    background: rgba(24, 24, 27, 0.6);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    border: 1px solid rgba(71, 85, 105, 0.3);
+    border: 1px solid var(--color-border-light);
   }
 
   /* Gradient border utility */
@@ -143,7 +157,7 @@
     z-index: -1;
     margin: -2px;
     border-radius: inherit;
-    background: linear-gradient(135deg, #0ea5e9, #38bdf8);
+    background: linear-gradient(135deg, var(--color-primary), var(--color-accent));
   }
 
   /* Hide scrollbar utility */

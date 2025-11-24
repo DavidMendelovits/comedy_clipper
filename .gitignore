@@ -59,4 +59,12 @@ output/
 # Electron
 node_modules/
 dist-electron/
+dist/
+python-bundle/
 *.log
+
+# Model files (too large for git)
+*.pt
+*.pth
+*.onnx
+openpose_models/

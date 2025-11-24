@@ -16,7 +16,6 @@ const Tooltip: React.FC<TooltipProps> = ({
   className = '',
 }) => {
   const [isVisible, setIsVisible] = useState(false);
-  const [coords, setCoords] = useState({ x: 0, y: 0 });
   const timeoutRef = useRef<NodeJS.Timeout>();
   const triggerRef = useRef<HTMLDivElement>(null);
 

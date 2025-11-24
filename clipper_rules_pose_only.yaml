@@ -1,0 +1,169 @@
+# Comedy Clipper - Pose-Only Detection
+# Simplified configuration focused on pose detection without complex zone boundaries
+# Best for standup comedy videos where comedians enter/exit the stage
+
+# ============================================================================
+# DETECTION MODE
+# ============================================================================
+detection_mode: multimodal  # Use both face and pose for better accuracy
+
+# ============================================================================
+# TRANSITION-BASED DETECTION
+# ============================================================================
+# DISABLED: Person counting is unreliable - using position-based detection instead
+transition_detection:
+  enabled: false
+
+  rules: []
+
+  transition_stability_frames: 5
+  person_count_method: max
+  person_count_smoothing: true
+  smoothing_window: 9
+
+# ============================================================================
+# POSITION-BASED DETECTION (Primary Detection Method)
+# ============================================================================
+# Detects when person walks off frame (stage left/right)
+# This is the PRIMARY detection method - clips every time someone exits
+position_detection:
+  enabled: true
+
+  # How close to frame edge before considered "exiting" (0.0 to 0.5)
+  # 0.10 = person is within 10% of frame edge (more sensitive)
+  # 0.15 = person is within 15% of frame edge (balanced)
+  # 0.20 = person is within 20% of frame edge (less sensitive)
+  exit_threshold: 0.12
+
+  # Position must be stable for N frames before triggering exit
+  # Lower = more responsive to exits
+  # Higher = more stable, prevents false exits
+  # At 1 frame/sec: 1 = 1 second stability required
+  exit_stability_frames: 1
+
+  # Track position of: "center" (bounding box center) or "torso" (pose landmarks)
+  # "torso" is more accurate for detecting stage exits
+  tracking_point: torso
+
+# ============================================================================
+# DETECTION CONFIDENCE
+# ============================================================================
+confidence:
+  # Face detection settings
+  face_detection:
+    min_detection_confidence: 0.5
+    model_selection: 1  # 1 = full range (best for stage)
+
+  # Pose detection settings
+  pose_detection:
+    min_detection_confidence: 0.5
+    min_tracking_confidence: 0.5
+    model_complexity: 1  # 1 = balanced performance/accuracy
+    smooth_landmarks: true
+
+# ============================================================================
+# SEGMENT FILTERING
+# ============================================================================
+filtering:
+  # Minimum segment duration (seconds)
+  # Segments shorter than this will be discarded
+  min_duration: 30.0
+
+  # Maximum segment duration (seconds, 0 = no limit)
+  # Set a max to avoid capturing multiple comedians in one clip
+  max_duration: 600.0  # 10 minutes max
+
+  # Minimum gap between segments (seconds)
+  # Segments closer than this will be kept separate
+  min_gap: 5.0
+
+  # Auto-merge close segments
+  # Keep FALSE - each exit should be a separate clip
+  merge_close_segments: false
+
+  # Time buffer (seconds) to add before/after detected exits
+  # Captures a bit of context around the exit
+  buffer_before_start: 2.0
+  buffer_after_end: 2.0
+
+# ============================================================================
+# VIDEO PROCESSING
+# ============================================================================
+processing:
+  # Frame sampling rate (1 = every frame, 30 = 1 frame per second at 30fps)
+  # Higher = faster processing but may miss quick transitions
+  sample_rate: 30
+
+  # Adaptive sampling: process more frames during transitions
+  adaptive_sampling: true
+  adaptive_rate_on_change: 10  # Process 3 frames/sec during transitions
+
+# ============================================================================
+# OUTPUT
+# ============================================================================
+output:
+  # Timestamped folder names
+  use_timestamps: true
+
+  # Folder naming
+  clips_folder_suffix: "clips"
+  debug_folder_suffix: "debug"
+
+  # FFmpeg encoding settings
+  ffmpeg:
+    video_codec: libx264
+    audio_codec: aac
+    preset: fast
+    crf: 23
+
+# ============================================================================
+# DEBUG
+# ============================================================================
+debug:
+  export_frames: true
+  export_first_frame: true
+  export_last_frame: true
+  export_transition_frames: false
+
+  overlays:
+    draw_pose_landmarks: true
+    draw_face_boxes: true
+    draw_stage_boundaries: false  # No stage boundaries in pose-only mode
+    draw_position_indicator: true
+    draw_text_info: true
+
+  text_info:
+    - frame_number
+    - num_faces
+    - num_poses
+    - person_count
+    - position
+
+# ============================================================================
+# DISABLED FEATURES
+# ============================================================================
+# These features are disabled for simplified pose-only detection
+
+yolo_detection:
+  enabled: false
+
+zone_crossing:
+  enabled: false
+
+kalman_filter:
+  enabled: true
+  process_noise: 1.0
+  measurement_noise: 5.0
+  initial_covariance: 10.0
+
+blur_detection:
+  enabled: false
+
+scene_detection:
+  threshold: 0.3
+  max_gap: 5.0
+
+experimental:
+  motion_based_segmentation: false
+  audio_based_segmentation: false
+  multi_person_tracking: false

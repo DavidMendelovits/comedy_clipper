@@ -1,0 +1,21 @@
+# YOLO11/12 Pose Detection Requirements
+# Install with: pip install -r requirements_yolo.txt
+
+# Core dependencies
+opencv-python>=4.8.0
+numpy>=1.24.0
+pyyaml>=6.0
+
+# YOLO11/12 pose detection
+ultralytics>=8.3.0
+
+# Optional: MediaPipe for comparison
+mediapipe>=0.10.0
+
+# Optional: GPU acceleration (CUDA)
+# Uncomment and install if you have an NVIDIA GPU:
+# torch>=2.0.0
+# torchvision>=0.15.0
+
+# Note: Requires Python 3.8-3.12
+# For Apple Silicon (M1/M2), PyTorch with MPS acceleration will be used automatically

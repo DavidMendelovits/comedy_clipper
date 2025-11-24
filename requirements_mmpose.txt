@@ -1,0 +1,22 @@
+# MMPose Detection Requirements
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# MMPose and dependencies
+# Note: Installing mmpose separately to avoid chumpy dependency issues
+mmcv>=2.0.0
+mmengine>=0.9.0
+mmdet>=3.2.0
+
+# PyTorch (adjust based on your CUDA version)
+# For CPU only:
+torch>=2.0.0
+torchvision>=0.15.0
+
+# For CUDA 11.8:
+# torch>=2.0.0+cu118
+# torchvision>=0.15.0+cu118
+# Install from: https://pytorch.org/get-started/locally/
+
+# Install mmpose without dependencies to avoid chumpy build issues
+# Run: pip install --no-deps mmpose
