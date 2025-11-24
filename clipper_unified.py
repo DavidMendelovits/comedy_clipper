@@ -14,6 +14,10 @@ import subprocess
 from datetime import datetime
 from config_loader import load_config, ClipperConfig
 
+# Import cache manager
+sys.path.insert(0, str(Path(__file__).parent / "python_backend"))
+from core.cache_manager import CacheManager, DetectionCache, DetectionFrame, create_detection_cache
+
 # Optional imports based on detection mode
 try:
     import cv2
@@ -112,7 +116,7 @@ class KalmanPositionTracker:
 class UnifiedComedyClipper:
     """Unified clipper supporting multiple detection methods"""
 
-    def __init__(self, config: ClipperConfig, mode: str = None, debug: bool = False):
+    def __init__(self, config: ClipperConfig, mode: str = None, debug: bool = False, use_cache: bool = True):
         """
         Initialize clipper with specified detection mode.
 
@@ -120,11 +124,16 @@ class UnifiedComedyClipper:
             config: Loaded configuration
             mode: Detection mode (auto-detect if None)
             debug: Whether to export debug frames
+            use_cache: Whether to use cached detection data (default: True)
         """
         self.config = config
         self.debug = debug or config.get("debug.export_frames", False)
         self.debug_dir = None  # Will be set if debug frames are exported
         self.stage_polygon = None  # Will be set if zone crossing is enabled
+        self.use_cache = use_cache
+
+        # Initialize cache manager
+        self.cache_manager = CacheManager() if use_cache else None
 
         # Auto-detect mode from config if not specified
         if mode is None:
@@ -135,7 +144,7 @@ class UnifiedComedyClipper:
         # Initialize detectors based on mode
         self._init_detectors()
 
-        print(f"Initialized in '{self.mode}' mode")
+        print(f"Initialized in '{self.mode}' mode{' (caching enabled)' if use_cache else ''}")
 
     def _emit_progress(self, phase: str, percent: int, current: int = None, total: int = None, message: str = None):
         """Emit structured progress JSON for UI consumption"""
@@ -470,88 +479,125 @@ class UnifiedComedyClipper:
         sample_rate = self.config.get("processing.sample_rate", 30)
         sample_interval = int(sample_rate)
 
+        # Try to load from cache
+        detection_cache = None
         detection_history = []
+        cached_detection_loaded = False
+
+        if self.use_cache and self.cache_manager:
+            print("[CACHE] Checking for cached detection data...")
+            config_dict = self.config.to_dict() if hasattr(self.config, 'to_dict') else dict(self.config._config)
+            detection_cache = self.cache_manager.load_cache(video_path, config_dict)
+
+            if detection_cache:
+                print(f"[CACHE] ✓ Found cached data with {len(detection_cache.frames)} frames")
+                print(f"[CACHE] Cache created: {datetime.fromtimestamp(detection_cache.created_at).strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"[CACHE] Detection method: {detection_cache.detection_method}")
+
+                # Convert cached frames to detection_history format
+                detection_history = [
+                    (
+                        frame.frame_num,
+                        frame.face_count,
+                        frame.pose_count,
+                        frame.person_count,
+                        frame.positions[0] if frame.positions else None,  # avg_position
+                        frame.blur_score,
+                        frame.blur_score < self.config.get("blur_detection.threshold", 100.0)  # is_blurry
+                    )
+                    for frame in detection_cache.frames
+                ]
+                cached_detection_loaded = True
+                self._emit_progress("detection", 100, total_frames, total_frames, "Loaded from cache")
+
+                # Close video since we don't need to process frames
+                cap.release()
+            else:
+                print("[CACHE] No cache found, will process video and cache results")
+
         debug_data = {}
 
-        # Initialize zone checker for zone crossing detection
-        zone_checker = self._create_zone_checker(frame_width, frame_height)
-        if zone_checker:
-            print("Zone crossing detection enabled")
-            print(f"  Stage boundary: {self.stage_polygon.tolist() if self.stage_polygon is not None else 'None'}")
+        # Only process frames if we don't have cached data
+        if not cached_detection_loaded:
+            # Initialize zone checker for zone crossing detection
+            zone_checker = self._create_zone_checker(frame_width, frame_height)
+            if zone_checker:
+                print("Zone crossing detection enabled")
+                print(f"  Stage boundary: {self.stage_polygon.tolist() if self.stage_polygon is not None else 'None'}")
 
-        # Kalman filter
-        use_kalman = self.config.get("kalman_filter.enabled", True) and KALMAN_AVAILABLE
-        kalman_tracker = KalmanPositionTracker(self.config) if use_kalman else None
+            # Kalman filter
+            use_kalman = self.config.get("kalman_filter.enabled", True) and KALMAN_AVAILABLE
+            kalman_tracker = KalmanPositionTracker(self.config) if use_kalman else None
 
-        # Blur detection
-        use_blur_detection = self.config.get("blur_detection.enabled", True)
-        blur_count = 0
+            # Blur detection
+            use_blur_detection = self.config.get("blur_detection.enabled", True)
+            blur_count = 0
 
-        # Edge zones
-        exit_threshold = self.config.get("position_detection.exit_threshold", 0.15)
-        left_edge = frame_width * exit_threshold
-        right_edge = frame_width * (1 - exit_threshold)
+            # Edge zones
+            exit_threshold = self.config.get("position_detection.exit_threshold", 0.15)
+            left_edge = frame_width * exit_threshold
+            right_edge = frame_width * (1 - exit_threshold)
 
-        frame_num = 0
-        checked_frames = 0
+            frame_num = 0
+            checked_frames = 0
 
-        if not json_output:
-            print("[STEP] Processing video frames")
+            if not json_output:
+                print("[STEP] Processing video frames")
 
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
 
-            if frame_num % sample_interval == 0:
-                # Calculate blur score
-                blur_score = 0.0
-                is_blurry = False
-                if use_blur_detection:
-                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
-                    blur_score = float(laplacian.var())
-                    threshold = self.config.get("blur_detection.threshold", 100.0)
-                    is_blurry = blur_score < threshold
-                    if is_blurry:
-                        blur_count += 1
+                if frame_num % sample_interval == 0:
+                    # Calculate blur score
+                    blur_score = 0.0
+                    is_blurry = False
+                    if use_blur_detection:
+                        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+                        blur_score = float(laplacian.var())
+                        threshold = self.config.get("blur_detection.threshold", 100.0)
+                        is_blurry = blur_score < threshold
+                        if is_blurry:
+                            blur_count += 1
 
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-                num_faces = 0
-                face_positions = []
-                face_detections_list = []
+                    num_faces = 0
+                    face_positions = []
+                    face_detections_list = []
 
-                num_poses = 0
-                pose_positions = []
-                pose_landmarks_list = []
+                    num_poses = 0
+                    pose_positions = []
+                    pose_landmarks_list = []
 
-                # Face detection
-                if self.mode in ["multimodal", "face"]:
-                    face_results = self.face_detection.process(rgb_frame)
-                    if face_results.detections:
-                        for detection in face_results.detections:
-                            num_faces += 1
-                            bbox = detection.location_data.relative_bounding_box
-                            center_x = (bbox.xmin + bbox.width / 2) * frame_width
-                            face_positions.append(center_x)
-                            face_detections_list.append(detection)
+                    # Face detection
+                    if self.mode in ["multimodal", "face"]:
+                        face_results = self.face_detection.process(rgb_frame)
+                        if face_results.detections:
+                            for detection in face_results.detections:
+                                num_faces += 1
+                                bbox = detection.location_data.relative_bounding_box
+                                center_x = (bbox.xmin + bbox.width / 2) * frame_width
+                                face_positions.append(center_x)
+                                face_detections_list.append(detection)
 
-                # Pose detection
-                if self.mode in ["multimodal", "pose", "mediapipe"]:
-                    pose_results = self.pose.process(rgb_frame)
-                    if pose_results.pose_landmarks:
-                        num_poses = 1
-                        landmarks = pose_results.pose_landmarks.landmark
+                    # Pose detection
+                    if self.mode in ["multimodal", "pose", "mediapipe"]:
+                        pose_results = self.pose.process(rgb_frame)
+                        if pose_results.pose_landmarks:
+                            num_poses = 1
+                            landmarks = pose_results.pose_landmarks.landmark
 
-                        left_shoulder = landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER]
-                        right_shoulder = landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER]
-                        left_hip = landmarks[self.mp_pose.PoseLandmark.LEFT_HIP]
-                        right_hip = landmarks[self.mp_pose.PoseLandmark.RIGHT_HIP]
+                            left_shoulder = landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER]
+                            right_shoulder = landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER]
+                            left_hip = landmarks[self.mp_pose.PoseLandmark.LEFT_HIP]
+                            right_hip = landmarks[self.mp_pose.PoseLandmark.RIGHT_HIP]
 
-                        torso_x = (left_shoulder.x + right_shoulder.x + left_hip.x + right_hip.x) / 4
-                        pose_positions.append(torso_x * frame_width)
-                        pose_landmarks_list.append(pose_results.pose_landmarks)
+                            torso_x = (left_shoulder.x + right_shoulder.x + left_hip.x + right_hip.x) / 4
+                            pose_positions.append(torso_x * frame_width)
+                            pose_landmarks_list.append(pose_results.pose_landmarks)
 
                 # YOLO detection
                 num_yolo_persons = 0
@@ -677,11 +723,54 @@ class UnifiedComedyClipper:
                     if not json_output:
                         print(f"  Progress: {progress}% ({frame_num}/{total_frames} frames)")
 
-            frame_num += 1
+                frame_num += 1
 
-        cap.release()
+            cap.release()
 
-        self._emit_progress("detection", 100, total_frames, total_frames, "Frame processing complete")
+            # Save detection data to cache
+            if self.use_cache and self.cache_manager and not cached_detection_loaded:
+                print("[CACHE] Saving detection data...")
+                config_dict = self.config.to_dict() if hasattr(self.config, 'to_dict') else dict(self.config._config)
+                detection_cache = create_detection_cache(
+                    video_path=video_path,
+                    config=config_dict,
+                    fps=fps,
+                    frame_count=total_frames,
+                    duration=duration,
+                    width=frame_width,
+                    height=frame_height,
+                    detection_method=self.mode,
+                    model_version="1.0"
+                )
+
+                # Add all detection frames to cache
+                for frame_num, num_faces, num_poses, person_count, position, blur_score, is_blurry in detection_history:
+                    detection_frame = DetectionFrame(
+                        frame_num=frame_num,
+                        timestamp=frame_num / fps,
+                        face_count=num_faces,
+                        pose_count=num_poses,
+                        yolo_count=0,  # Not directly stored in history
+                        person_count=person_count,
+                        positions=[position] if position is not None else [],
+                        blur_score=blur_score
+                    )
+                    detection_cache.frames.append(detection_frame)
+
+                # Save to disk
+                success = self.cache_manager.save_cache(detection_cache)
+                if success:
+                    print(f"[CACHE] ✓ Saved {len(detection_cache.frames)} frames to cache")
+                else:
+                    print("[CACHE] ✗ Failed to save cache")
+
+            self._emit_progress("detection", 100, total_frames, total_frames, "Frame processing complete")
+            checked_frames = len(detection_history)  # Update checked_frames if loaded from cache
+        else:
+            # When loaded from cache, set checked_frames
+            checked_frames = len(detection_history)
+            left_edge = frame_width * self.config.get("position_detection.exit_threshold", 0.15)
+            right_edge = frame_width * (1 - self.config.get("position_detection.exit_threshold", 0.15))
 
         # Calculate detection statistics
         total_with_faces = sum(1 for d in detection_history if d[1] > 0)
