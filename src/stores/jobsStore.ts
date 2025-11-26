@@ -49,6 +49,7 @@ interface JobsState {
   handleJobComplete: (event: JobCompleteEvent) => void;
   handleJobError: (event: JobErrorEvent) => void;
   handleJobStatusChange: (event: JobStatusChangeEvent) => void;
+  handleJobChunkComplete: (event: any) => void;
 
   // Selectors
   getActiveJob: () => Job | undefined;
@@ -338,6 +339,34 @@ export const useJobsStore = create<JobsState>((set, get) => ({
     });
   },
 
+  // Handle chunk completion event
+  handleJobChunkComplete: (event: any) => {
+    console.log('[JobStore] Chunk complete event:', event);
+    set((state) => {
+      const job = state.jobs[event.jobId];
+      if (!job) {
+        console.warn('[JobStore] Job not found for chunk complete event:', event.jobId);
+        return state;
+      }
+
+      return {
+        jobs: {
+          ...state.jobs,
+          [event.jobId]: {
+            ...job,
+            chunkCount: event.totalChunks,
+            chunksCompleted: event.chunksCompleted,
+            progress: {
+              ...job.progress,
+              percent: Math.round((event.chunksCompleted / event.totalChunks) * 100),
+              message: `Processing chunk ${event.chunksCompleted}/${event.totalChunks}`
+            }
+          },
+        },
+      };
+    });
+  },
+
   // Get active job
   getActiveJob: () => {
     const state = get();
@@ -436,6 +465,15 @@ export function setupJobEventListeners() {
       store.loadJobStatistics();
     });
     console.log('[JobStore] ✓ Job status change listener registered');
+  }
+
+  // Chunk completion (new for pose processing)
+  if (window.electron.onJobChunkComplete) {
+    window.electron.onJobChunkComplete((event) => {
+      console.log('[JobStore] Received chunk complete event:', event);
+      store.handleJobChunkComplete(event);
+    });
+    console.log('[JobStore] ✓ Chunk complete listener registered');
   }
 
   console.log('[JobStore] ✅ All job event listeners initialized');

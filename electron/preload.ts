@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('electron', {
   getJob: (jobId: string) => ipcRenderer.invoke('get-job', jobId),
   getJobs: (filter?: any) => ipcRenderer.invoke('get-jobs', filter),
   getJobStatistics: () => ipcRenderer.invoke('get-job-statistics'),
+  getPoseEvents: (jobId: string, options?: any) => ipcRenderer.invoke('get-pose-events', jobId, options),
+  getPoseMetadataCache: (jobId: string) => ipcRenderer.invoke('get-pose-metadata-cache', jobId),
 
   // File system operations
   getClips: (directory: string) => ipcRenderer.invoke('get-clips', directory),
@@ -109,6 +111,29 @@ contextBridge.exposeInMainWorld('electron', {
     const subscription = (_event: any, data: any) => callback(data)
     ipcRenderer.on('job-status-change', subscription)
     return () => ipcRenderer.removeListener('job-status-change', subscription)
+  },
+
+  onJobChunkComplete: (callback: (data: any) => void) => {
+    const subscription = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('job-chunk-complete', subscription)
+    return () => ipcRenderer.removeListener('job-chunk-complete', subscription)
+  },
+
+  // Export video with overlays
+  exportVideoWithOverlays: (config: {
+    jobId: string
+    videoPath: string
+    poseCachePath: string
+    outputPath: string
+    overlays: string[]
+  }) => ipcRenderer.invoke('export-video-with-overlays', config),
+
+  cancelExport: (jobId: string) => ipcRenderer.invoke('cancel-export', jobId),
+
+  onExportProgress: (callback: (data: any) => void) => {
+    const subscription = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('export-progress', subscription)
+    return () => ipcRenderer.removeListener('export-progress', subscription)
   },
 })
 

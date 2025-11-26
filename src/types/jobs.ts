@@ -8,7 +8,14 @@
 // ============================================================================
 
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
-export type JobType = 'clipper' | 'comparison' | 'reclip';
+export type JobType =
+  | 'clipper'
+  | 'comparison'
+  | 'reclip'
+  | 'pose_detection'  // Pipeline-specific job types
+  | 'face_detection'
+  | 'scene_detection'
+  | 'multimodal';
 
 // ============================================================================
 // Job Configuration Types
@@ -47,7 +54,12 @@ export interface ReclipJobConfig {
   debug?: boolean;
 }
 
-export type JobConfig = ClipperJobConfig | ComparisonJobConfig | ReclipJobConfig;
+// Pipeline job configuration (schema-driven)
+export interface PipelineJobConfig {
+  [key: string]: any;  // Dynamic config based on pipeline schema
+}
+
+export type JobConfig = ClipperJobConfig | ComparisonJobConfig | ReclipJobConfig | PipelineJobConfig;
 
 // ============================================================================
 // Job Progress
@@ -270,4 +282,12 @@ export interface JobStatusChangeEvent {
   status: JobStatus;
   previousStatus: JobStatus;
   timestamp?: number;
+}
+
+export interface JobChunkCompleteEvent {
+  jobId: string;
+  chunkIndex: number;
+  chunksCompleted: number;
+  totalChunks: number;
+  eventsCount: number;
 }

@@ -33,8 +33,8 @@ export function DashboardPage() {
   ];
 
   return (
-    <div className="h-full overflow-auto">
-      <div className="max-w-7xl mx-auto p-8 space-y-8">
+    <div className="min-h-full">
+      <div className="max-w-7xl mx-auto p-8 space-y-8 pb-16">
         {/* Header */}
         <div>
           <h2 className="text-3xl font-bold text-[var(--color-text-primary)]">
