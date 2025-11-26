@@ -6,7 +6,8 @@ import type {
   JobLogEvent,
   JobCompleteEvent,
   JobErrorEvent,
-  JobStatusChangeEvent
+  JobStatusChangeEvent,
+  JobChunkCompleteEvent
 } from './jobs';
 
 export interface ElectronAPI {
@@ -94,12 +95,13 @@ export interface ElectronAPI {
   onClipperStep?: (callback: (data: { step: string }) => void) => void
   onClipperLog?: (callback: (data: { level: string; message: string; timestamp: string }) => void) => void
 
-  // New job event listeners
-  onJobProgress: (callback: (event: JobProgressEvent) => void) => void
-  onJobLog: (callback: (event: JobLogEvent) => void) => void
-  onJobComplete: (callback: (event: JobCompleteEvent) => void) => void
-  onJobError: (callback: (event: JobErrorEvent) => void) => void
-  onJobStatusChange: (callback: (event: JobStatusChangeEvent) => void) => void
+  // New job event listeners (return unsubscribe function)
+  onJobProgress: (callback: (event: JobProgressEvent) => void) => () => void
+  onJobLog: (callback: (event: JobLogEvent) => void) => () => void
+  onJobComplete: (callback: (event: JobCompleteEvent) => void) => () => void
+  onJobError: (callback: (event: JobErrorEvent) => void) => () => void
+  onJobStatusChange: (callback: (event: JobStatusChangeEvent) => void) => () => void
+  onJobChunkComplete: (callback: (event: JobChunkCompleteEvent) => void) => () => void
 
   // Pose comparison (existing)
   runPoseComparison?: (config: {
@@ -112,6 +114,34 @@ export interface ElectronAPI {
     report_path?: string
   }>
   onPoseComparisonProgress?: (callback: (data: any) => void) => void
+
+  // Export video with overlays
+  exportVideoWithOverlays: (config: {
+    jobId: string
+    videoPath: string
+    poseCachePath: string
+    outputPath: string
+    overlays: string[]
+  }) => Promise<{
+    success: boolean
+    outputPath?: string
+    frames?: number
+    duration?: number
+    fileSize?: number
+    error?: string
+  }>
+
+  cancelExport: (jobId: string) => Promise<{ success: boolean; error?: string }>
+
+  onExportProgress: (callback: (data: {
+    jobId: string
+    type: string
+    phase: string
+    percent: number
+    frame: number
+    total: number
+    message?: string
+  }) => void) => () => void
 }
 
 declare global {

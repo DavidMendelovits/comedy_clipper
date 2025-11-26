@@ -4,6 +4,7 @@ import { spawn, ChildProcess } from 'child_process'
 import fs from 'fs'
 import Database from 'better-sqlite3'
 import { v4 as uuidv4 } from 'uuid'
+import { getPipelineSchema } from '../src/schemas'
 
 let mainWindow: BrowserWindow | null = null
 let pythonProcess: ChildProcess | null = null
@@ -15,6 +16,7 @@ const jobProcesses = new Map<string, ChildProcess>()
 // All modes now use the unified clipper script (except YOLO pose which uses its own)
 const UNIFIED_SCRIPT = 'clipper_unified.py'
 const YOLO_POSE_SCRIPT = 'clipper_yolo_pose.py'
+const POSE_PROCESSOR_SCRIPT = 'yolo_pose_processor.py'  // New simplified processor
 
 // Map UI clipper types to unified script modes
 const MODE_MAP: Record<string, string> = {
@@ -71,7 +73,15 @@ function createWindow() {
 // Initialize SQLite database
 function initDatabase() {
   const userDataPath = app.getPath('userData')
+
+  // Ensure the userData directory exists
+  if (!fs.existsSync(userDataPath)) {
+    fs.mkdirSync(userDataPath, { recursive: true })
+  }
+
   const dbPath = path.join(userDataPath, 'comedy-clipper.db')
+
+  console.log('Initializing database at:', dbPath)
 
   db = new Database(dbPath)
 
@@ -103,10 +113,31 @@ function initDatabase() {
       result_json TEXT,
       error_json TEXT,
 
+      chunk_count INTEGER DEFAULT 0,
+      chunks_completed INTEGER DEFAULT 0,
+      pose_events_json TEXT,
+
       log_file TEXT,
       updated_at INTEGER NOT NULL
     )
   `)
+
+  // Add new columns to existing jobs table (for migration)
+  try {
+    db.exec(`ALTER TABLE jobs ADD COLUMN chunk_count INTEGER DEFAULT 0`)
+  } catch (e) {
+    // Column already exists
+  }
+  try {
+    db.exec(`ALTER TABLE jobs ADD COLUMN chunks_completed INTEGER DEFAULT 0`)
+  } catch (e) {
+    // Column already exists
+  }
+  try {
+    db.exec(`ALTER TABLE jobs ADD COLUMN pose_events_json TEXT`)
+  } catch (e) {
+    // Column already exists
+  }
 
   // Create indices for jobs table
   db.exec(`
@@ -132,6 +163,30 @@ function initDatabase() {
   // Create index for job_logs
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_job_logs_job_id ON job_logs(job_id, timestamp);
+  `)
+
+  // Create pose_metadata table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pose_metadata (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      chunk_index INTEGER NOT NULL,
+      timestamp REAL NOT NULL,
+      event_type TEXT NOT NULL,
+      person_id INTEGER NOT NULL,
+      confidence REAL NOT NULL,
+      bbox_json TEXT NOT NULL,
+      keypoints_json TEXT,
+      created_at INTEGER NOT NULL,
+
+      FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+    )
+  `)
+
+  // Create indices for pose_metadata
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_pose_metadata_job_id ON pose_metadata(job_id, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_pose_metadata_event_type ON pose_metadata(event_type);
   `)
 
   console.log('Database initialized at:', dbPath)
@@ -927,6 +982,9 @@ ipcMain.handle('get-job', async (_event, jobId: string) => {
       result: row.result_json ? JSON.parse(row.result_json) : undefined,
       error: row.error_json ? JSON.parse(row.error_json) : undefined,
       logFile: row.log_file,
+      chunkCount: row.chunk_count || 0,
+      chunksCompleted: row.chunks_completed || 0,
+      poseEvents: row.pose_events_json ? JSON.parse(row.pose_events_json) : [],
       logs: [] // Logs loaded separately if needed
     }
 
@@ -1086,7 +1144,10 @@ function updateJobStatus(jobId: string, status: string, additionalFields: any = 
 
 // Update job progress
 function updateJobProgress(jobId: string, progress: any) {
-  if (!db) return
+  if (!db) {
+    console.warn('Database not initialized, skipping job progress update')
+    return
+  }
 
   try {
     const stmt = db.prepare('UPDATE jobs SET progress_json = ?, updated_at = ? WHERE id = ?')
@@ -1097,14 +1158,17 @@ function updateJobProgress(jobId: string, progress: any) {
       jobId,
       progress
     })
-  } catch (error) {
-    console.error('Error updating job progress:', error)
+  } catch (error: any) {
+    console.error('Error updating job progress:', error.message || error)
   }
 }
 
 // Add job log
 function addJobLog(jobId: string, level: string, message: string) {
-  if (!db) return
+  if (!db) {
+    console.warn('Database not initialized, skipping job log')
+    return
+  }
 
   try {
     const stmt = db.prepare(`
@@ -1119,8 +1183,8 @@ function addJobLog(jobId: string, level: string, message: string) {
       jobId,
       log: { timestamp, level, message }
     })
-  } catch (error) {
-    console.error('Error adding job log:', error)
+  } catch (error: any) {
+    console.error('Error adding job log:', error.message || error)
   }
 }
 
@@ -1170,6 +1234,50 @@ function failJob(jobId: string, error: any) {
   }
 }
 
+/**
+ * Build CLI arguments from pipeline schema and config
+ * Iterates through all parameters in the schema and maps them to CLI arguments
+ */
+function buildPipelineArgs(pipelineType: string, config: Record<string, any>): string[] {
+  const args: string[] = []
+  const schema = getPipelineSchema(pipelineType)
+
+  if (!schema) {
+    console.warn(`No schema found for pipeline type: ${pipelineType}`)
+    return args
+  }
+
+  // Iterate through all parameter groups
+  schema.groups.forEach(group => {
+    group.parameters.forEach(param => {
+      const value = config[param.key]
+
+      // Skip if value is undefined, null, or same as default
+      if (value === undefined || value === null) {
+        return
+      }
+
+      // Add CLI argument with value
+      args.push(param.cliArg)
+
+      // Boolean parameters don't need a value (they're flags)
+      if (param.type === 'boolean') {
+        // Only add the flag if value is true
+        // For false, we just don't add the flag
+        if (!value) {
+          args.pop() // Remove the flag we just added
+        }
+      } else {
+        // All other types need a value
+        args.push(String(value))
+      }
+    })
+  })
+
+  console.log(`Built ${args.length} CLI arguments from schema for ${pipelineType}:`, args)
+  return args
+}
+
 // Cancel job
 ipcMain.handle('cancel-job', async (_event, jobId: string) => {
   try {
@@ -1199,7 +1307,7 @@ ipcMain.handle('delete-job', async (_event, jobId: string) => {
       jobProcesses.delete(jobId)
     }
 
-    // Delete from database (cascades to job_logs)
+    // Delete from database (cascades to job_logs and pose_metadata)
     const stmt = db.prepare('DELETE FROM jobs WHERE id = ?')
     stmt.run(jobId)
 
@@ -1210,7 +1318,97 @@ ipcMain.handle('delete-job', async (_event, jobId: string) => {
   }
 })
 
-// Start job - Execute the job
+// Get pose events for a job
+ipcMain.handle('get-pose-events', async (_event, jobId: string, options?: {
+  eventType?: 'enter' | 'exit'
+  limit?: number
+  offset?: number
+}) => {
+  if (!db) return []
+
+  try {
+    let query = 'SELECT * FROM pose_metadata WHERE job_id = ?'
+    const params: any[] = [jobId]
+
+    if (options?.eventType) {
+      query += ' AND event_type = ?'
+      params.push(options.eventType)
+    }
+
+    query += ' ORDER BY timestamp ASC'
+
+    if (options?.limit) {
+      query += ' LIMIT ?'
+      params.push(options.limit)
+      if (options?.offset) {
+        query += ' OFFSET ?'
+        params.push(options.offset)
+      }
+    }
+
+    const stmt = db.prepare(query)
+    const rows = stmt.all(...params) as any[]
+
+    return rows.map(row => ({
+      id: row.id,
+      jobId: row.job_id,
+      chunkIndex: row.chunk_index,
+      timestamp: row.timestamp,
+      eventType: row.event_type,
+      personId: row.person_id,
+      confidence: row.confidence,
+      bbox: JSON.parse(row.bbox_json),
+      keypoints: row.keypoints_json ? JSON.parse(row.keypoints_json) : [],
+      createdAt: row.created_at
+    }))
+  } catch (error) {
+    console.error('Error getting pose events:', error)
+    return []
+  }
+})
+
+// Get pose metadata cache - Load frame-by-frame pose data
+ipcMain.handle('get-pose-metadata-cache', async (_event, jobId: string) => {
+  if (!db) return null
+
+  try {
+    // Get job from database
+    const stmt = db.prepare('SELECT * FROM jobs WHERE id = ?')
+    const jobRow = stmt.get(jobId) as any
+
+    if (!jobRow) {
+      console.error('Job not found:', jobId)
+      return null
+    }
+
+    // Parse result JSON to get cache path
+    const result = jobRow.result_json ? JSON.parse(jobRow.result_json) : null
+    const cachePath = result?.poseMetadataCache
+
+    if (!cachePath) {
+      console.log('No pose metadata cache path in job result')
+      return null
+    }
+
+    // Check if cache file exists
+    if (!fs.existsSync(cachePath)) {
+      console.error('Pose metadata cache file not found:', cachePath)
+      return null
+    }
+
+    // Read and parse cache file
+    const cacheData = fs.readFileSync(cachePath, 'utf8')
+    const cache = JSON.parse(cacheData)
+
+    console.log(`Loaded pose metadata cache: ${Object.keys(cache).length} timestamps`)
+    return cache
+  } catch (error: any) {
+    console.error('Error loading pose metadata cache:', error.message || error)
+    return null
+  }
+})
+
+// Start job - Execute the job with new YOLO pose processor
 ipcMain.handle('start-job', async (_event, jobId: string) => {
   if (!db) return { success: false, error: 'Database not initialized' }
 
@@ -1228,52 +1426,23 @@ ipcMain.handle('start-job', async (_event, jobId: string) => {
 
     // Update job status to running
     updateJobStatus(jobId, 'running')
-    addJobLog(jobId, 'info', 'Starting job execution...')
+    addJobLog(jobId, 'info', 'Starting pose detection...')
 
-    // Similar to run-clipper, but with job ID tracking
     return new Promise((resolve, reject) => {
       const appPath = app.getAppPath()
       const resourcesPath = process.resourcesPath || appPath
 
-      // Choose script based on clipper type
-      const clipperType = config.clipperType || 'multimodal'
-      const useYoloScript = clipperType === 'yolo_pose'
-      const scriptName = useYoloScript ? YOLO_POSE_SCRIPT : UNIFIED_SCRIPT
-
+      // Use new pose processor script
       const scriptPath = app.isPackaged
-        ? path.join(resourcesPath, 'python-bundle', scriptName)
-        : path.join(appPath, scriptName)
+        ? path.join(resourcesPath, 'python-bundle', POSE_PROCESSOR_SCRIPT)
+        : path.join(appPath, POSE_PROCESSOR_SCRIPT)
 
-      // Build command arguments
-      const args = [scriptPath, videoPath]
+      // Build command arguments from schema
+      const args = [scriptPath, videoPath, '--json']
 
-      if (!useYoloScript) {
-        const mode = MODE_MAP[clipperType] || clipperType
-        args.push('--mode', mode)
-      } else if (config.yoloModel) {
-        args.push('--model', config.yoloModel)
-      }
-
-      args.push('--json')
-
-      if (config.outputDir) args.push('-o', config.outputDir)
-      if (config.minDuration) args.push('--min-duration', config.minDuration.toString())
-      if (config.debug) args.push('-d')
-
-      // Overlay video options
-      if (config.exportOverlayVideo) {
-        args.push('--export-overlay')
-        if (!config.overlayIncludeSkeletons) {
-          args.push('--no-overlay-skeletons')
-        }
-        if (config.overlayShowInfo) {
-          args.push('--overlay-show-info')
-        }
-      }
-
-      // Handle config file
-      let configPath = config.configFile || 'clipper_rules.yaml'
-      if (configPath) args.push('-c', configPath)
+      // Add pipeline-specific arguments from schema
+      const pipelineArgs = buildPipelineArgs(jobRow.type, config)
+      args.push(...pipelineArgs)
 
       // Find Python executable
       const pythonSearchPaths = app.isPackaged ? [
@@ -1299,7 +1468,7 @@ ipcMain.handle('start-job', async (_event, jobId: string) => {
       updateLogStmt?.run(logFile, jobId)
 
       console.log(`Starting job ${jobId}:`, pythonCmd, args.join(' '))
-      logStream.write(`=== Comedy Clipper Job ${jobId} ===\n`)
+      logStream.write(`=== Pose Detection Job ${jobId} ===\n`)
       logStream.write(`Video: ${videoPath}\n`)
       logStream.write(`Command: ${pythonCmd} ${args.join(' ')}\n\n`)
 
@@ -1309,11 +1478,12 @@ ipcMain.handle('start-job', async (_event, jobId: string) => {
       let output = ''
       let jsonOutput = ''
       let isJsonLine = false
+      let chunkCount = 0
 
       // Get current progress from DB to update
       const getCurrentProgress = () => {
         const row = db?.prepare('SELECT progress_json FROM jobs WHERE id = ?').get(jobId) as any
-        return row ? JSON.parse(row.progress_json) : { percent: 0, steps: [] }
+        return row ? JSON.parse(row.progress_json) : { percent: 0, phase: 'initialization' }
       }
 
       jobProcess.stdout?.on('data', (data) => {
@@ -1323,16 +1493,16 @@ ipcMain.handle('start-job', async (_event, jobId: string) => {
 
         addJobLog(jobId, 'info', message.trim())
 
-        // Check if this is JSON output
+        // Check if this is final JSON output
         if (message.trim().startsWith('{') || isJsonLine) {
           jsonOutput += message
-          isJsonLine = !message.includes('}')
+          isJsonLine = !message.includes('}') || jsonOutput.split('{').length > jsonOutput.split('}').length
         } else {
           // Parse step messages
           const stepMatch = message.match(/\[STEP\] (.+)/)
           if (stepMatch) {
             const currentProgress = getCurrentProgress()
-            currentProgress.steps.push(stepMatch[1].trim())
+            currentProgress.step = stepMatch[1].trim()
             updateJobProgress(jobId, currentProgress)
           }
 
@@ -1344,20 +1514,41 @@ ipcMain.handle('start-job', async (_event, jobId: string) => {
               const currentProgress = getCurrentProgress()
               Object.assign(currentProgress, progressData)
               updateJobProgress(jobId, currentProgress)
+
+              // Update chunk_count when we learn it
+              if (progressData.total && progressData.phase === 'chunking') {
+                chunkCount = progressData.total
+                const updateChunkStmt = db?.prepare('UPDATE jobs SET chunk_count = ? WHERE id = ?')
+                updateChunkStmt?.run(chunkCount, jobId)
+              }
             } catch (e) {
               console.error('Failed to parse progress JSON:', e)
             }
           }
 
-          // Legacy progress parsing
-          const progressMatch = message.match(/Processing frame (\d+)\/(\d+)/)
-          if (progressMatch) {
-            const [, current, total] = progressMatch
-            const currentProgress = getCurrentProgress()
-            currentProgress.currentFrame = parseInt(current)
-            currentProgress.totalFrames = parseInt(total)
-            currentProgress.percent = (parseInt(current) / parseInt(total)) * 100
-            updateJobProgress(jobId, currentProgress)
+          // Parse chunk completion events
+          const chunkCompleteMatch = message.match(/\[CHUNK_COMPLETE\] (.+)/)
+          if (chunkCompleteMatch) {
+            try {
+              const chunkData = JSON.parse(chunkCompleteMatch[1])
+
+              // Update chunks_completed in database
+              const updateChunksStmt = db?.prepare('UPDATE jobs SET chunks_completed = ? WHERE id = ?')
+              updateChunksStmt?.run(chunkData.chunks_completed, jobId)
+
+              // Emit event to renderer for real-time UI update
+              mainWindow?.webContents.send('job-chunk-complete', {
+                jobId,
+                chunkIndex: chunkData.chunk_index,
+                chunksCompleted: chunkData.chunks_completed,
+                totalChunks: chunkData.total_chunks,
+                eventsCount: chunkData.events_count
+              })
+
+              console.log(`Job ${jobId}: Chunk ${chunkData.chunk_index} complete (${chunkData.chunks_completed}/${chunkData.total_chunks})`)
+            } catch (e) {
+              console.error('Failed to parse chunk completion JSON:', e)
+            }
           }
         }
       })
@@ -1375,27 +1566,55 @@ ipcMain.handle('start-job', async (_event, jobId: string) => {
 
         if (code === 0) {
           try {
+            // Parse final JSON result
             const result = JSON.parse(jsonOutput || output)
 
-            const clips = result.clips?.map((clipPath: string) => ({
-              name: path.basename(clipPath),
-              path: clipPath,
-              size: fs.existsSync(clipPath) ? fs.statSync(clipPath).size : 0,
-            })) || []
+            if (!result.success) {
+              failJob(jobId, { message: result.error || 'Processing failed', code: 'PROCESSING_ERROR' })
+              reject({ success: false, error: result.error })
+              return
+            }
+
+            // Store pose events in database
+            const events = result.events || []
+            const insertEventStmt = db?.prepare(`
+              INSERT INTO pose_metadata (id, job_id, chunk_index, timestamp, event_type, person_id, confidence, bbox_json, keypoints_json, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `)
+
+            events.forEach((event: any) => {
+              insertEventStmt?.run(
+                uuidv4(),
+                jobId,
+                0,  // chunk_index (can derive from timestamp if needed)
+                event.timestamp,
+                event.event_type,
+                event.person_id,
+                event.confidence,
+                JSON.stringify(event.bbox),
+                JSON.stringify(event.keypoints),
+                Date.now()
+              )
+            })
+
+            // Update job with pose events summary
+            const updateEventsStmt = db?.prepare('UPDATE jobs SET pose_events_json = ? WHERE id = ?')
+            updateEventsStmt?.run(JSON.stringify(events), jobId)
 
             const jobResult = {
-              clips,
-              segmentsDetected: result.segments_detected || [],
-              segmentsFiltered: result.segments_filtered || [],
-              outputDir: result.output_dir,
-              debugDir: result.debug_dir,
-              overlayVideo: result.overlay_video,
+              events,
+              eventsCount: events.length,
+              enterEvents: events.filter((e: any) => e.event_type === 'enter').length,
+              exitEvents: events.filter((e: any) => e.event_type === 'exit').length,
+              poseMetadataCache: result.pose_metadata_cache,
+              videoInfo: result.video_info
             }
 
             completeJob(jobId, jobResult)
             resolve({ success: true, jobId, result: jobResult })
           } catch (e) {
             console.error('JSON parsing failed:', e)
+            console.error('Attempted to parse:', jsonOutput || output)
             failJob(jobId, { message: 'Failed to parse job output', code: 'PARSE_ERROR' })
             reject({ success: false, error: 'Failed to parse output' })
           }
@@ -1515,6 +1734,134 @@ ipcMain.handle('save-file', async (_event, sourceFile: string, suggestedName: st
   }
 
   return { success: false, error: 'Cancelled' }
+})
+
+// Export video with overlays
+const exportProcesses = new Map<string, ChildProcess>()
+
+ipcMain.handle('export-video-with-overlays', async (_event, config: {
+  jobId: string
+  videoPath: string
+  poseCachePath: string
+  outputPath: string
+  overlays: string[]
+}) => {
+  return new Promise((resolve, reject) => {
+    const { jobId, videoPath, poseCachePath, outputPath, overlays } = config
+    const appPath = app.getAppPath()
+    const resourcesPath = process.resourcesPath || appPath
+
+    // Path to export script
+    const scriptPath = app.isPackaged
+      ? path.join(resourcesPath, 'python-bundle', 'video_export_overlay.py')
+      : path.join(appPath, 'video_export_overlay.py')
+
+    console.log('Exporting video with overlays:', { scriptPath, videoPath, outputPath, overlays })
+
+    // Find Python executable
+    const pythonSearchPaths = app.isPackaged ? [
+      path.join(resourcesPath, 'python-bundle', 'python-env', 'bin', 'python3'),
+      path.join(resourcesPath, 'python-bundle', 'python-env', 'bin', 'python'),
+    ] : [
+      path.join(appPath, 'venv', 'bin', 'python3'),
+      path.join(appPath, 'venv', 'bin', 'python'),
+    ]
+
+    const pythonCmd = pythonSearchPaths.find(p => fs.existsSync(p))
+      || (process.platform === 'win32' ? 'python' : 'python3')
+
+    const args = [
+      scriptPath,
+      '--video', videoPath,
+      '--pose-cache', poseCachePath,
+      '--output', outputPath,
+      '--overlays', overlays.join(',')
+    ]
+
+    console.log('Running:', pythonCmd, args.join(' '))
+
+    const exportProcess = spawn(pythonCmd, args, {
+      cwd: app.isPackaged ? path.join(resourcesPath, 'python-bundle') : appPath
+    })
+
+    exportProcesses.set(jobId, exportProcess)
+
+    let output = ''
+    let errorOutput = ''
+
+    exportProcess.stdout.on('data', (data) => {
+      const text = data.toString()
+      output += text
+
+      // Parse progress events
+      const lines = text.split('\n')
+      lines.forEach((line: string) => {
+        const progressMatch = line.match(/\[PROGRESS\]\s*(.+)/)
+        if (progressMatch) {
+          try {
+            const progress = JSON.parse(progressMatch[1])
+            if (mainWindow) {
+              mainWindow.webContents.send('export-progress', { jobId, ...progress })
+            }
+          } catch (e) {
+            console.error('Failed to parse progress:', e)
+          }
+        }
+      })
+    })
+
+    exportProcess.stderr.on('data', (data) => {
+      const text = data.toString()
+      errorOutput += text
+      console.error('[Export Error]', text)
+    })
+
+    exportProcess.on('close', (code) => {
+      exportProcesses.delete(jobId)
+
+      if (code === 0) {
+        // Try to parse JSON result from output
+        try {
+          const lines = output.split('\n').filter((l: string) => l.trim())
+          const lastLine = lines[lines.length - 1]
+          const result = JSON.parse(lastLine)
+          resolve({
+            success: true,
+            outputPath: result.outputPath,
+            frames: result.frames,
+            duration: result.duration,
+            fileSize: result.fileSize
+          })
+        } catch (e) {
+          // No JSON result, but process succeeded
+          resolve({ success: true, outputPath })
+        }
+      } else {
+        resolve({
+          success: false,
+          error: `Export failed with code ${code}: ${errorOutput}`
+        })
+      }
+    })
+
+    exportProcess.on('error', (error) => {
+      exportProcesses.delete(jobId)
+      resolve({
+        success: false,
+        error: `Failed to start export: ${error.message}`
+      })
+    })
+  })
+})
+
+ipcMain.handle('cancel-export', async (_event, jobId: string) => {
+  const exportProcess = exportProcesses.get(jobId)
+  if (exportProcess) {
+    exportProcess.kill()
+    exportProcesses.delete(jobId)
+    return { success: true }
+  }
+  return { success: false, error: 'Export process not found' }
 })
 
 function parseOutputForClips(output: string, baseDir: string): Array<{ name: string; path: string }> {
