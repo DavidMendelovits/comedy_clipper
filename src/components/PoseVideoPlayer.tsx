@@ -24,6 +24,7 @@ export function PoseVideoPlayer({ videoPath, className = '' }: PoseVideoPlayerPr
     setDuration,
     setIsPlaying,
     setVideoElement,
+    applyPendingSeek,
     seekToTime,
     getNextEvent,
     getPreviousEvent
@@ -45,6 +46,19 @@ export function PoseVideoPlayer({ videoPath, className = '' }: PoseVideoPlayerPr
     setDuration(video.duration)
     setVideoLoaded(true)
   }, [setDuration])
+
+  // Handle video can play (ready for seeking)
+  const handleCanPlay = useCallback(() => {
+    applyPendingSeek()
+  }, [applyPendingSeek])
+
+  // Handle seek completed - sync store time with actual video time
+  const handleSeeked = useCallback(() => {
+    const video = videoElementRef.current
+    if (video) {
+      setCurrentTime(video.currentTime)
+    }
+  }, [setCurrentTime])
 
   // Draw pose overlay on canvas - triggered by pose changes
   useEffect(() => {
@@ -138,12 +152,8 @@ export function PoseVideoPlayer({ videoPath, className = '' }: PoseVideoPlayerPr
   }
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const video = videoElementRef.current
-    if (!video) return
-
     const time = parseFloat(e.target.value)
-    video.currentTime = time
-    setCurrentTime(time)
+    seekToTime(time)  // Use store's robust seeking logic with proper error handling
   }
 
   const jumpToNextEvent = () => {
@@ -177,6 +187,8 @@ export function PoseVideoPlayer({ videoPath, className = '' }: PoseVideoPlayerPr
         onTimeUpdate={setCurrentTime}
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
+        onCanPlay={handleCanPlay}
+        onSeeked={handleSeeked}
       >
         {(overlayBounds) => (
           <canvas
