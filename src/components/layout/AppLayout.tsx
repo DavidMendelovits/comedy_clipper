@@ -12,10 +12,10 @@ export function AppLayout() {
 
   const navItems = [
     { to: '/', label: 'Dashboard', icon: Home },
-    { to: '/process', label: 'Process', icon: Video },
+    // { to: '/process', label: 'Process', icon: Video },
     { to: '/jobs', label: 'Jobs', icon: History },
-    { to: '/compare', label: 'Compare', icon: GitCompare },
-    { to: '/settings', label: 'Settings', icon: Settings },
+    // { to: '/compare', label: 'Compare', icon: GitCompare },
+    // { to: '/settings', label: 'Settings', icon: Settings },
   ];
 
   return (

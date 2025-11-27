@@ -60,32 +60,46 @@ class TrackedPerson:
     """Represents a tracked person with state management for ID stability"""
 
     def __init__(self, person_id: int, bbox: Tuple[float, float, float, float],
-                 keypoints: List[Tuple[float, float, float]], timestamp: float):
+                 keypoints: List[Tuple[float, float, float]], timestamp: float,
+                 entry_edge: str = None):
         self.person_id = person_id
         self.last_bbox = bbox
         self.last_keypoints = keypoints
         self.frames_missing = 0
-        self.state = 'active'  # 'active', 'dormant', 'exited'
+        self.state = 'pending'  # 'pending', 'active', 'dormant', 'exited'
         self.last_seen_timestamp = timestamp
         self.first_seen_timestamp = timestamp
+        self.consecutive_detections = 1  # Count of consecutive frames detected
+        self.entry_edge = entry_edge  # 'left', 'right', 'top', 'bottom', or None
+        self.enter_event_emitted = False  # Has the enter event been emitted?
+        self.last_confidence = 0.0  # Track detection confidence
 
     def update(self, bbox: Tuple[float, float, float, float],
-               keypoints: List[Tuple[float, float, float]], timestamp: float):
+               keypoints: List[Tuple[float, float, float]], timestamp: float,
+               confidence: float = 0.0):
         """Update person with new detection"""
         self.last_bbox = bbox
         self.last_keypoints = keypoints
         self.frames_missing = 0
-        self.state = 'active'
+        self.consecutive_detections += 1
         self.last_seen_timestamp = timestamp
+        self.last_confidence = confidence
+        # Transition from pending to active handled externally based on time
 
     def mark_missing(self):
-        """Increment missing frame counter"""
+        """Increment missing frame counter and reset consecutive detections"""
         self.frames_missing += 1
+        self.consecutive_detections = 0
 
     def get_center(self) -> Tuple[float, float]:
         """Get center point of last known bounding box"""
         x1, y1, x2, y2 = self.last_bbox
         return ((x1 + x2) / 2, (y1 + y2) / 2)
+
+    def get_bbox_area(self) -> float:
+        """Get bounding box area"""
+        x1, y1, x2, y2 = self.last_bbox
+        return (x2 - x1) * (y2 - y1)
 
 
 class YOLOPoseProcessor:
@@ -94,16 +108,24 @@ class YOLOPoseProcessor:
     CHUNK_DURATION = 30.0  # 30 seconds per chunk
     CONFIDENCE_THRESHOLD = 0.5  # Detection confidence threshold (relaxed from 0.6)
     NMS_IOU_THRESHOLD = 0.45  # Non-Maximum Suppression IOU threshold
-    MIN_VISIBLE_KEYPOINTS = 6  # Minimum visible keypoints required (relaxed from 9 for better tracking)
+    MIN_VISIBLE_KEYPOINTS = 7  # Minimum visible keypoints required (was 6)
     MIN_DETECTION_CONFIDENCE = 0.50  # Minimum per-detection box confidence (relaxed from 0.65)
     KEYPOINT_CONFIDENCE_THRESHOLD = 0.30  # Keypoint confidence threshold (relaxed from 0.45)
     MIN_ASPECT_RATIO = 1.3  # Minimum bbox height/width ratio (relaxed from 1.5)
     MAX_ASPECT_RATIO = 3.2  # Maximum bbox height/width ratio (relaxed from 2.8)
-    MIN_KEYPOINT_COVERAGE = 0.20  # Minimum keypoint coverage fraction (relaxed from 0.35)
+    MIN_KEYPOINT_COVERAGE = 0.30  # Minimum keypoint coverage fraction (was 0.20)
+    MIN_VERTICAL_KEYPOINT_SPAN = 0.50  # Keypoints must span 50% of bbox height (filters head-only detections)
     SAMPLE_RATE = 10  # Process every 10th frame (3 fps at 30fps video, was 30)
     EXIT_STABILITY_FRAMES = 5  # Require person absent for N frames before exit (was 3)
-    EXIT_EDGE_THRESHOLD = 0.15  # Person must be within 15% of frame edge to confirm exit
-    DORMANT_TIMEOUT_SECONDS = 30.0  # Keep dormant persons for 30 seconds before cleanup
+    EXIT_EDGE_THRESHOLD = 0.20  # Person must be within 20% of frame edge to confirm exit (was 15%)
+    DORMANT_TIMEOUT_SECONDS = 10.0  # Keep dormant persons for 10 seconds before cleanup (was 30s)
+
+    # Smart tracking for static camera comedy shows
+    AUDIENCE_ZONE_THRESHOLD = 0.25  # Ignore detections in bottom 25% of frame (audience heads)
+    PRIMARY_PERFORMER_ONLY = True  # Only track the largest detection (the comedian)
+    ENTER_STABILITY_SECONDS = 1.5  # Require presence for 1.5s before emitting enter event
+    EXIT_STABILITY_SECONDS = 2.0  # Require absence for 2.0s before emitting exit event
+    VALID_ENTRY_EDGES = ['left', 'right']  # Valid entry directions (stage wings, not audience)
 
     def __init__(self, video_path: str, model_name: str = "yolo11m-pose.pt",
                  confidence_threshold: float = None, nms_iou_threshold: float = None,
@@ -278,6 +300,7 @@ class YOLOPoseProcessor:
 
         # Get frame dimensions for exit validation
         frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
         while True:
             ret, frame = cap.read()
@@ -344,8 +367,8 @@ class YOLOPoseProcessor:
                             bbox_area = bbox_width * bbox_height
                             frame_area = frame.shape[0] * frame.shape[1]
 
-                            # Skip tiny detections (< 1% of frame area) - likely noise
-                            if bbox_area < (frame_area * 0.01):
+                            # Skip tiny detections (< 2% of frame area) - likely noise or audience heads
+                            if bbox_area < (frame_area * 0.02):
                                 continue
 
                             # Skip unrealistic aspect ratios (UPDATED: tightened range 1.5-2.8)
@@ -353,7 +376,7 @@ class YOLOPoseProcessor:
                             if aspect_ratio < self.MIN_ASPECT_RATIO or aspect_ratio > self.MAX_ASPECT_RATIO:
                                 continue  # Skip if too wide or impossibly tall
 
-                            # 3. Keypoint clustering check (NEW) - ensure keypoints are spatially grouped
+                            # 3. Keypoint clustering check - ensure keypoints are spatially grouped
                             valid_keypoints = [(x, y) for x, y, c in kpts_list if c > self.KEYPOINT_CONFIDENCE_THRESHOLD]
                             if len(valid_keypoints) >= 2:
                                 kp_xs = [x for x, y in valid_keypoints]
@@ -364,11 +387,36 @@ class YOLOPoseProcessor:
                                 if kp_coverage < self.MIN_KEYPOINT_COVERAGE:
                                     continue  # Skip if keypoints don't cover enough of the bounding box
 
+                                # 4. Vertical keypoint span check - filter out head-only detections
+                                # Heads have keypoints clustered at top (~30-40% span)
+                                # Bodies (even with feet cut off) have keypoints spanning head to hips (~70-90%)
+                                vertical_span = kp_height / bbox_height if bbox_height > 0 else 0
+                                if vertical_span < self.MIN_VERTICAL_KEYPOINT_SPAN:
+                                    continue  # Skip - likely just a head (audience member)
+
                             detected_persons.append({
                                 'bbox': bbox,
                                 'keypoints': kpts_list,
-                                'confidence': float(avg_conf)
+                                'confidence': float(avg_conf),
+                                'bbox_area': bbox_area
                             })
+
+                # SMART FILTERING: Audience zone and primary performer selection
+
+                # 1. Filter out detections in audience zone (bottom of frame)
+                detected_persons = [
+                    p for p in detected_persons
+                    if not self._is_in_audience_zone(p['bbox'], frame_height)
+                ]
+
+                # 2. Primary performer selection: only keep the largest detection
+                if self.PRIMARY_PERFORMER_ONLY and len(detected_persons) > 1:
+                    # Sort by bbox area descending, keep only the largest
+                    detected_persons.sort(key=lambda p: p['bbox_area'], reverse=True)
+                    detected_persons = detected_persons[:1]
+                    # Log that we're filtering to primary
+                    if len(detected_persons) == 1:
+                        print(f"    [Primary] Selected largest detection (area={detected_persons[0]['bbox_area']:.0f})", flush=True)
 
                 # Match detected persons to tracked persons (including dormant)
                 current_frame_persons = set()  # Set of person_ids detected this frame
@@ -384,31 +432,53 @@ class YOLOPoseProcessor:
                         # Update existing person
                         person = tracked_persons[matched_id]
                         was_dormant = person.state == 'dormant'
-                        person.update(bbox, keypoints, global_timestamp)
+                        was_pending = person.state == 'pending'
+                        person.update(bbox, keypoints, global_timestamp, detection['confidence'])
                         current_frame_persons.add(matched_id)
 
-                        # If re-activated from dormant, log it (no event needed)
+                        # If re-activated from dormant, reset to pending
                         if was_dormant:
-                            print(f"  [Re-activated] Person {matched_id} at {global_timestamp:.2f}s", flush=True)
+                            person.state = 'pending'
+                            person.first_seen_timestamp = global_timestamp
+                            print(f"  [Re-activated] Person {matched_id} at {global_timestamp:.2f}s (back to pending)", flush=True)
+
+                        # Check if pending person should transition to active (temporal hysteresis)
+                        if person.state == 'pending' and not person.enter_event_emitted:
+                            presence_duration = global_timestamp - person.first_seen_timestamp
+                            if presence_duration >= self.ENTER_STABILITY_SECONDS:
+                                # Person has been present long enough - emit enter event
+                                person.state = 'active'
+                                person.enter_event_emitted = True
+
+                                events.append(PoseEvent(
+                                    timestamp=person.first_seen_timestamp,  # Use first seen time
+                                    event_type='enter',
+                                    person_id=matched_id,
+                                    confidence=person.last_confidence,
+                                    bbox=person.last_bbox,
+                                    keypoints=person.last_keypoints
+                                ))
+                                print(f"  [ENTER confirmed] Person {matched_id} at {person.first_seen_timestamp:.2f}s (stable for {presence_duration:.1f}s)", flush=True)
                     else:
-                        # New person entered
+                        # New person detected - determine entry edge
+                        entry_edge = self._get_entry_edge(bbox, frame_width, frame_height)
+
+                        # Validate entry direction (must be from valid edges, not audience)
+                        if entry_edge is not None and entry_edge not in self.VALID_ENTRY_EDGES:
+                            print(f"    [Ignored] Detection entered from '{entry_edge}' (invalid entry direction)", flush=True)
+                            continue  # Skip this detection
+
+                        # Create new TrackedPerson in pending state
                         person_id = next_person_id
                         next_person_id += 1
 
-                        # Create new TrackedPerson
-                        new_person = TrackedPerson(person_id, bbox, keypoints, global_timestamp)
+                        new_person = TrackedPerson(person_id, bbox, keypoints, global_timestamp, entry_edge)
+                        new_person.last_confidence = detection['confidence']
                         tracked_persons[person_id] = new_person
                         current_frame_persons.add(person_id)
 
-                        # Create ENTER event
-                        events.append(PoseEvent(
-                            timestamp=global_timestamp,
-                            event_type='enter',
-                            person_id=person_id,
-                            confidence=detection['confidence'],
-                            bbox=bbox,
-                            keypoints=keypoints
-                        ))
+                        print(f"  [Pending] New person {person_id} at {global_timestamp:.2f}s (entry_edge={entry_edge})", flush=True)
+                        # Don't emit ENTER event yet - wait for temporal hysteresis
 
                 # Check for persons who weren't detected this frame
                 for person_id, person in tracked_persons.items():
@@ -416,27 +486,39 @@ class YOLOPoseProcessor:
                         # Person not detected - increment missing counter
                         person.mark_missing()
 
-                        # Check if we should change state
-                        if person.frames_missing >= self.EXIT_STABILITY_FRAMES:
+                        # Calculate how long they've been missing
+                        missing_duration = global_timestamp - person.last_seen_timestamp
+
+                        # For pending persons (enter not yet emitted), just drop them
+                        if person.state == 'pending' and not person.enter_event_emitted:
+                            if missing_duration > self.ENTER_STABILITY_SECONDS:
+                                # Pending person disappeared before stabilizing - just remove
+                                person.state = 'exited'
+                                print(f"  [Dropped] Pending person {person_id} never stabilized (missing {missing_duration:.1f}s)", flush=True)
+                            continue
+
+                        # For active persons, use temporal hysteresis for exits
+                        if missing_duration >= self.EXIT_STABILITY_SECONDS:
                             # Check if this is a valid exit (near frame edge)
-                            if self._is_valid_exit(person.last_bbox, frame_width):
+                            if self._is_valid_exit(person.last_bbox, frame_width, frame_height):
                                 # Valid exit - person was near edge
                                 person.state = 'exited'
                                 events.append(PoseEvent(
-                                    timestamp=global_timestamp,
+                                    timestamp=person.last_seen_timestamp,  # Use last seen time
                                     event_type='exit',
                                     person_id=person_id,
                                     confidence=1.0,
                                     bbox=person.last_bbox,
                                     keypoints=[]
                                 ))
+                                print(f"  [EXIT confirmed] Person {person_id} at {person.last_seen_timestamp:.2f}s (absent for {missing_duration:.1f}s)", flush=True)
                             else:
                                 # Invalid exit - person disappeared mid-frame
                                 # Mark as dormant, don't emit exit event
                                 person.state = 'dormant'
-                                print(f"  [Dormant] Person {person_id} - not near edge, keeping for re-match", flush=True)
+                                print(f"  [Dormant] Person {person_id} - not near edge after {missing_duration:.1f}s, keeping for re-match", flush=True)
 
-                # Cleanup old dormant persons (optional - prevent memory leak)
+                # Cleanup old dormant persons - emit exit events for timed-out dormant persons
                 for person_id in list(tracked_persons.keys()):
                     person = tracked_persons[person_id]
                     if person.state == 'dormant':
@@ -444,11 +526,24 @@ class YOLOPoseProcessor:
                         if dormant_duration > self.DORMANT_TIMEOUT_SECONDS:
                             # Person has been dormant too long, assume they actually left
                             person.state = 'exited'
+                            # Only emit exit if enter was emitted
+                            if person.enter_event_emitted:
+                                events.append(PoseEvent(
+                                    timestamp=person.last_seen_timestamp,  # Use last seen time as exit time
+                                    event_type='exit',
+                                    person_id=person_id,
+                                    confidence=0.7,  # Lower confidence for timeout-based exit
+                                    bbox=person.last_bbox,
+                                    keypoints=[]
+                                ))
+                                print(f"  [Exit from dormant] Person {person_id} timed out at {person.last_seen_timestamp:.2f}s", flush=True)
+                            else:
+                                print(f"  [Dropped dormant] Person {person_id} never confirmed, removing", flush=True)
 
-                # Store pose metadata for this frame (only active persons)
+                # Store pose metadata for this frame (active and pending persons for visualization)
                 active_persons_for_metadata = {
                     pid: p for pid, p in tracked_persons.items()
-                    if p.state == 'active'
+                    if p.state in ('active', 'pending')
                 }
                 pose_metadata[global_timestamp] = {
                     'frame_num': frame_num,
@@ -468,8 +563,42 @@ class YOLOPoseProcessor:
 
         cap.release()
 
-        # Handle persons still active at end of chunk (they might exit in next chunk)
-        # We don't emit exit events here, they'll be handled if they don't appear in next chunk
+        # Handle persons still tracked at end of chunk
+        # Only emit exit events for CONFIRMED persons (enter_event_emitted=True)
+        # Skip pending persons and persons who never stabilized
+        for person_id, person in tracked_persons.items():
+            # Only emit exits for persons whose enter was confirmed
+            if not person.enter_event_emitted:
+                if person.state != 'exited':
+                    print(f"  [End of chunk - dropped] Pending person {person_id} never confirmed", flush=True)
+                continue
+
+            if person.state == 'dormant':
+                # Dormant person - emit exit at last seen time
+                is_near_edge = self._is_valid_exit(person.last_bbox, frame_width, frame_height)
+                exit_confidence = 0.8 if is_near_edge else 0.5
+                events.append(PoseEvent(
+                    timestamp=person.last_seen_timestamp,
+                    event_type='exit',
+                    person_id=person_id,
+                    confidence=exit_confidence,
+                    bbox=person.last_bbox,
+                    keypoints=[]
+                ))
+                print(f"  [End of chunk - dormant exit] Person {person_id} at {person.last_seen_timestamp:.2f}s", flush=True)
+            elif person.state == 'active' and person.frames_missing > 0:
+                # Active but has been missing - likely exiting
+                is_near_edge = self._is_valid_exit(person.last_bbox, frame_width, frame_height)
+                exit_confidence = 0.7 if is_near_edge else 0.4
+                events.append(PoseEvent(
+                    timestamp=person.last_seen_timestamp,
+                    event_type='exit',
+                    person_id=person_id,
+                    confidence=exit_confidence,
+                    bbox=person.last_bbox,
+                    keypoints=[]
+                ))
+                print(f"  [End of chunk - missing exit] Person {person_id} at {person.last_seen_timestamp:.2f}s (missing {person.frames_missing} frames)", flush=True)
 
         return chunk.index, events, pose_metadata
 
@@ -508,26 +637,74 @@ class YOLOPoseProcessor:
 
         return np.sqrt((center1[0] - center2[0])**2 + (center1[1] - center2[1])**2)
 
+    def _get_entry_edge(self, bbox: Tuple[float, float, float, float],
+                        frame_width: float, frame_height: float) -> Optional[str]:
+        """
+        Determine which edge a detection entered from based on bbox position.
+        Returns 'left', 'right', 'top', 'bottom', or None if not near edge.
+        """
+        x1, y1, x2, y2 = bbox
+        center_x = (x1 + x2) / 2
+        center_y = (y1 + y2) / 2
+
+        threshold = self.EXIT_EDGE_THRESHOLD  # Use same threshold for entry
+
+        # Check edges in priority order (sides first for stage wings)
+        if center_x < frame_width * threshold:
+            return 'left'
+        elif center_x > frame_width * (1 - threshold):
+            return 'right'
+        elif center_y < frame_height * threshold:
+            return 'top'
+        elif center_y > frame_height * (1 - threshold):
+            return 'bottom'
+
+        return None
+
+    def _is_in_audience_zone(self, bbox: Tuple[float, float, float, float],
+                             frame_height: float) -> bool:
+        """
+        Check if detection is in the audience zone (bottom portion of frame).
+        Audience heads typically appear at the very bottom of the frame.
+        """
+        x1, y1, x2, y2 = bbox
+        center_y = (y1 + y2) / 2
+
+        # Detection is in audience zone if center is in bottom portion
+        return center_y > frame_height * (1 - self.AUDIENCE_ZONE_THRESHOLD)
+
     def _is_valid_exit(self, last_bbox: Tuple[float, float, float, float],
-                       frame_width: float) -> bool:
+                       frame_width: float, frame_height: float = None) -> bool:
         """
         Validate that exit is plausible based on last known position.
-        Person must be within EXIT_EDGE_THRESHOLD of frame edge.
+        Person must be within EXIT_EDGE_THRESHOLD of any frame edge.
+
+        Args:
+            last_bbox: Last known bounding box (x1, y1, x2, y2)
+            frame_width: Width of the frame
+            frame_height: Height of the frame (optional, defaults to frame_width for aspect ratio)
         """
         x1, y1, x2, y2 = last_bbox
         center_x = (x1 + x2) / 2
+        center_y = (y1 + y2) / 2
 
-        # Check if person was near left or right edge
+        # Use frame_height if provided, otherwise estimate from frame_width
+        if frame_height is None:
+            frame_height = frame_width * 9 / 16  # Assume 16:9 aspect ratio
+
+        # Check if person was near any edge (left, right, top, or bottom)
         near_left = center_x < frame_width * self.EXIT_EDGE_THRESHOLD
         near_right = center_x > frame_width * (1 - self.EXIT_EDGE_THRESHOLD)
+        near_top = center_y < frame_height * self.EXIT_EDGE_THRESHOLD
+        near_bottom = center_y > frame_height * (1 - self.EXIT_EDGE_THRESHOLD)
 
-        return near_left or near_right
+        return near_left or near_right or near_top or near_bottom
 
     def _match_detection_to_person(self, detection_bbox: Tuple[float, float, float, float],
                                    tracked_persons: Dict[int, 'TrackedPerson'],
                                    frame_width: float) -> Optional[int]:
         """
-        Match detection to existing person (active OR dormant).
+        Match detection to existing person (pending, active, OR dormant).
         Returns person_id if matched, None if new person.
         """
         best_match_id = None
@@ -550,6 +727,9 @@ class YOLOPoseProcessor:
                     score = max(iou, 0.2)  # Boost score for nearby dormant
                 else:
                     score = iou * 0.5  # Penalize far dormant matches
+            elif person.state == 'pending':
+                # Pending: use IOU but with a slight boost (we want to track new persons)
+                score = iou * 1.1  # Slight boost for pending matches
             else:
                 # Active person: use IOU directly
                 score = iou

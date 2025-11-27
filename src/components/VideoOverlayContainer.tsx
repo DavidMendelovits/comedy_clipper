@@ -17,6 +17,8 @@ interface VideoOverlayContainerProps {
   onTimeUpdate?: (currentTime: number) => void
   onPlay?: () => void
   onPause?: () => void
+  onCanPlay?: () => void
+  onSeeked?: () => void
   children: (bounds: OverlayBounds, videoRef: HTMLVideoElement | null) => ReactNode
 }
 
@@ -28,17 +30,27 @@ export function VideoOverlayContainer({
   onTimeUpdate,
   onPlay,
   onPause,
+  onCanPlay,
+  onSeeked,
   children
 }: VideoOverlayContainerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const isUnmountingRef = useRef(false)
   const [bounds, setBounds] = useState<OverlayBounds>({
     width: 0, height: 0, left: 0, top: 0, videoWidth: 0, videoHeight: 0
   })
 
   // Store callbacks in refs to avoid effect re-runs (prevents infinite loops)
-  const callbacksRef = useRef({ onVideoRef, onLoadedMetadata, onTimeUpdate, onPlay, onPause })
-  callbacksRef.current = { onVideoRef, onLoadedMetadata, onTimeUpdate, onPlay, onPause }
+  const callbacksRef = useRef({ onVideoRef, onLoadedMetadata, onTimeUpdate, onPlay, onPause, onCanPlay, onSeeked })
+  callbacksRef.current = { onVideoRef, onLoadedMetadata, onTimeUpdate, onPlay, onPause, onCanPlay, onSeeked }
+
+  // Track true unmount vs effect re-runs
+  useEffect(() => {
+    return () => {
+      isUnmountingRef.current = true
+    }
+  }, [])
 
   // Calculate overlay bounds based on actual video display area
   const updateBounds = useCallback(() => {
@@ -93,23 +105,32 @@ export function VideoOverlayContainer({
     const handleTimeUpdate = () => callbacksRef.current.onTimeUpdate?.(video.currentTime)
     const handlePlay = () => callbacksRef.current.onPlay?.()
     const handlePause = () => callbacksRef.current.onPause?.()
+    const handleCanPlay = () => callbacksRef.current.onCanPlay?.()
+    const handleSeeked = () => callbacksRef.current.onSeeked?.()
 
     video.addEventListener('loadedmetadata', handleLoadedMetadata)
     video.addEventListener('resize', updateBounds)
     video.addEventListener('timeupdate', handleTimeUpdate)
     video.addEventListener('play', handlePlay)
     video.addEventListener('pause', handlePause)
+    video.addEventListener('canplay', handleCanPlay)
+    video.addEventListener('seeked', handleSeeked)
 
     const resizeObserver = new ResizeObserver(updateBounds)
     resizeObserver.observe(container)
 
     return () => {
-      callbacksRef.current.onVideoRef?.(null)
+      // Only null the ref on true unmount, not effect re-runs (e.g., StrictMode)
+      if (isUnmountingRef.current) {
+        callbacksRef.current.onVideoRef?.(null)
+      }
       video.removeEventListener('loadedmetadata', handleLoadedMetadata)
       video.removeEventListener('resize', updateBounds)
       video.removeEventListener('timeupdate', handleTimeUpdate)
       video.removeEventListener('play', handlePlay)
       video.removeEventListener('pause', handlePause)
+      video.removeEventListener('canplay', handleCanPlay)
+      video.removeEventListener('seeked', handleSeeked)
       resizeObserver.disconnect()
     }
   }, [updateBounds])

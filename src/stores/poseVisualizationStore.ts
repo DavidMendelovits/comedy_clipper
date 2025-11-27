@@ -41,6 +41,9 @@ interface PoseVisualizationState {
   // Video element reference (for seeking)
   videoElement: HTMLVideoElement | null
 
+  // Pending seek time (applied when video becomes ready)
+  pendingSeekTime: number | null
+
   // Pose metadata cache (frame-by-frame data)
   poseMetadataCache: Record<number, any> | null
   cacheLoading: boolean
@@ -54,6 +57,7 @@ interface PoseVisualizationState {
   seekToTime: (time: number) => void
   seekToEvent: (eventIndex: number) => void
   setVideoElement: (element: HTMLVideoElement | null) => void
+  applyPendingSeek: () => void
   toggleSkeleton: () => void
   toggleBoundingBoxes: () => void
   toggleEventMarkers: () => void
@@ -77,6 +81,7 @@ export const usePoseVisualizationStore = create<PoseVisualizationState>((set, ge
   showEventMarkers: true,
   currentPoses: [],
   videoElement: null,
+  pendingSeekTime: null,
   poseMetadataCache: null,
   cacheLoading: false,
 
@@ -173,17 +178,73 @@ export const usePoseVisualizationStore = create<PoseVisualizationState>((set, ge
   // Set video element reference
   setVideoElement: (element: HTMLVideoElement | null) => {
     set({ videoElement: element })
+    // Apply any pending seek when video element becomes available
+    if (element) {
+      get().applyPendingSeek()
+    }
+  },
+
+  // Apply pending seek if video is ready
+  applyPendingSeek: () => {
+    const { videoElement, pendingSeekTime } = get()
+    if (!videoElement || pendingSeekTime === null) {
+      return
+    }
+
+    // Check if element is still in DOM (stale reference check)
+    if (!videoElement.isConnected) {
+      console.warn('[applyPendingSeek] Video element disconnected from DOM')
+      set({ videoElement: null })
+      return
+    }
+
+    // Check if video is ready to seek (readyState >= HAVE_METADATA)
+    if (videoElement.readyState >= 1) {
+      try {
+        videoElement.currentTime = pendingSeekTime
+        set({ pendingSeekTime: null })
+        console.log('[applyPendingSeek] Applied pending seek to', pendingSeekTime)
+      } catch (error) {
+        console.error('[applyPendingSeek] Failed to seek:', error)
+      }
+    }
   },
 
   // Seek to a specific time (updates both store and video element)
   seekToTime: (time: number) => {
     const videoElement = get().videoElement
-    if (videoElement) {
-      videoElement.currentTime = time
+
+    // Always update pose visualization immediately
+    get().setCurrentTime(time)
+
+    if (!videoElement) {
+      // No video element yet, store pending seek
+      set({ pendingSeekTime: time })
+      console.log('[seekToTime] No video element, storing pending seek to', time)
+      return
     }
 
-    // Use setCurrentTime to handle pose updates (includes cache logic)
-    get().setCurrentTime(time)
+    // Check if element is still in DOM (stale reference check)
+    if (!videoElement.isConnected) {
+      console.warn('[seekToTime] Video element disconnected from DOM, clearing reference')
+      set({ videoElement: null, pendingSeekTime: time })
+      return
+    }
+
+    // Check if video is ready to seek (readyState >= HAVE_METADATA)
+    if (videoElement.readyState >= 1) {
+      try {
+        videoElement.currentTime = time
+        set({ pendingSeekTime: null })
+      } catch (error) {
+        console.error('[seekToTime] Failed to seek:', error)
+        set({ pendingSeekTime: time })
+      }
+    } else {
+      // Video not ready, store pending seek
+      set({ pendingSeekTime: time })
+      console.log('[seekToTime] Video not ready (readyState:', videoElement.readyState, '), storing pending seek to', time)
+    }
   },
 
   // Seek to a specific event
